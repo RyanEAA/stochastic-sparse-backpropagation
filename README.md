@@ -66,17 +66,18 @@ NOT during inference or forward propagation.
 # Research Hypothesis
 
 The central hypothesis of this project is:
+
 $
-[
 \text{A substantial fraction of gradient computation may be unnecessary for effective learning}
-]
 $
+
 More specifically:
 #
-[
+
+$
 \text{Neural networks may tolerate significant stochastic sparsity during backpropagation}
-]
-#
+$
+
 without catastrophic degradation in accuracy.
 
 ---
@@ -89,9 +90,7 @@ The current implementation uses:
 
 For a linear layer:
 $
-[
 W \in \mathbb{R}^{out \times in}
-]
 $
 each row corresponds to one output neuron.
 
@@ -173,9 +172,7 @@ One particularly interesting observation is the existence of an apparent sparsit
 
 Training remains stable down to approximately:
 $
-[
 \text{keep ratio} \approx 0.60
-]
 $
 Below this threshold:
 
@@ -217,17 +214,13 @@ As a result:
 This project currently studies:
 
 $
-[
 \text{optimization sparsity}
-]
 $
 
 rather than true:
 
 $
-[
 \text{computational sparsity}
-]
 $
 ---
 
@@ -296,41 +289,31 @@ This project investigates several core questions:
 1.
 
 $
-[
 \text{How much backpropagation is truly necessary for learning?}
-]
 $
 
 2.
 
 $
-[
 \text{Can sparse gradient computation approximate dense learning?}
-]
 $
 
 3.
 
 $
-[
 \text{What sparsity level preserves accuracy while reducing learning density?}
-]
 $
 
 4.
 
 $
-[
 \text{Do neural networks exhibit gradient redundancy?}
-]
 $
 
 5.
 
 $
-[
 \text{Does sparse backpropagation exhibit critical phase transitions?}
-]
 $
 
 ---
