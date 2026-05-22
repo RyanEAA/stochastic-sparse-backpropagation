@@ -1,9 +1,12 @@
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-__pycache__/
+
+# Virtual environments
 .venv/
 venv/
 env/
+
+# MNIST data
+MNIST/
 data/
