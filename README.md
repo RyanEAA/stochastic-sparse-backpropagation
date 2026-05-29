@@ -399,4 +399,30 @@ The current focus is:
 
 Active Research Prototype
 
+## Recent Changes (summary)
+
+- **models.py**: Consolidates model definitions into a single module. For each supported dataset there are paired dense and sparse model classes (for example, `CIFAR10DenseModel` / `CIFAR10SparseModel`). Sparse variants are implemented to use the project's `SparseLinear` / `SparseLinearFunction` primitives so they follow the same neuron-level sparse-backprop behavior used elsewhere. Included datasets: CIFAR-10, CIFAR-100, MNIST, Fashion-MNIST, KMNIST, SVHN, Tiny-ImageNet, UCI-Adult, and Covertype. This file is now the canonical place to add or tune dataset-specific architectures.
+
+- **utils.py**: Central training and data utilities used across experiments. Key functions include `get_dataloaders(dataset_name, ...)` to build standard train/test loaders, `train_model(model, train_loader, test_loader, epochs, lr)` which returns per-epoch accuracies and elapsed training time, and `evaluate(model, loader)` for quick evaluation. The notebook imports these helpers to keep experiment code concise.
+
+- **visualization_utils.py**: Plotting and summary helpers used by the notebook: `plot_accuracy_over_epochs`, `plot_training_time_comparison`, `create_training_time_table`, and `create_accuracy_summary_table`. These helpers were updated to accept the project's result-dictionary format so you can pass recorded experiment outputs directly.
+
+- **Testing.ipynb**: Converted to a dataset-driven workflow that:
+    - reloads `models` interactively (`importlib.reload(models)`) so edits to `models.py` are picked up without a full kernel restart,
+    - exposes a `models_factory` mapping of normalized dataset names to dense/sparse classes and default kwargs,
+    - contains a single full-training cell which trains the dense model and then trains sparse models over a list of keep-ratios, storing outputs in two dictionaries:
+        - `dataset_acc_results[dataset_name] = {'dense': dense_acc_list, 'sparse': {keep_ratio: sparse_acc_list, ...}}`
+        - `dataset_time_results[dataset_name] = {'dense': dense_time_seconds, 'sparse': {keep_ratio: sparse_time_seconds, ...}}`
+    - includes visualization cells that call the functions in `visualization_utils.py` with those dictionaries.
+
+- **Compatibility wrappers**: `DenseMLP.py` and `SparseMLP.py` were converted into thin wrappers that re-export implementations from `models.py` so existing imports remain valid.
+
+## Quick usage notes
+
+1. Restart the Jupyter kernel (recommended) or re-run the import cell in `Testing.ipynb` that performs `importlib.reload(models)` so the notebook picks up changes to `models.py`.
+2. Set `full_dataset_name` to a supported dataset (for example `CIFAR10`) and run the full-training cell. The run will populate `dataset_acc_results` and `dataset_time_results`.
+3. Run the visualization cells to get accuracy-over-epochs plots and training-time comparisons; the plotting helpers accept the notebook's result-dictionary format directly.
+
+If you'd like, I can add a short standalone script to run a reproducible experiment (e.g., CIFAR-10 with specified epochs and keep-ratios) or run a training job here—tell me which dataset and settings to use.
+
 This project is currently experimental and under active development.
