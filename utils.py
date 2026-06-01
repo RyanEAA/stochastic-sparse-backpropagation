@@ -79,7 +79,9 @@ def get_dataloaders(name, batch_size_train=128, batch_size_test=256, data_dir=".
 
         df = fetch_openml('covertype', version=3, as_frame=True).frame
         df = df.dropna()
+        # OpenML Covertype labels are 1..7; convert to 0-based (0..6) for PyTorch
         y = df.iloc[:, -1].astype('int64').values
+        y = y - 1
         X = df.iloc[:, :-1]
         X = pd.get_dummies(X)
         X = X.astype('float32').values
