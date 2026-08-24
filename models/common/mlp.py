@@ -15,12 +15,13 @@ class DenseMLP(nn.Module):
     def forward(self, x): return self.net(x)
 
 class SparseMLP(nn.Module):
-    def __init__(self, input_features, hidden_dims, num_classes, sparse_linear_cls, keep_ratio):
+    def __init__(self, input_features, hidden_dims, num_classes, sparse_linear_cls, keep_ratio, sparse_layer_kwargs=None):
         super().__init__()
         dims = [input_features, *hidden_dims, num_classes]
         self.flatten = nn.Flatten()
+        sparse_layer_kwargs = sparse_layer_kwargs or {}
         self.layers = nn.ModuleList([
-            sparse_linear_cls(dims[i], dims[i+1], keep_ratio=keep_ratio)
+            sparse_linear_cls(dims[i], dims[i+1], keep_ratio=keep_ratio, **sparse_layer_kwargs)
             for i in range(len(dims)-1)
         ])
         self.relu = nn.ReLU()

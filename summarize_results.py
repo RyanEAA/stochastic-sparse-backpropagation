@@ -3,6 +3,23 @@ from pathlib import Path
 
 import pandas as pd
 
+
+def add_compatibility_columns(frame):
+    defaults = {
+        "architecture": "historical_mlp",
+        "protocol_version": "historical",
+        "block_size": 0,
+        "run_id": "",
+    }
+    for column, default in defaults.items():
+        if column not in frame.columns:
+            frame[column] = default
+    frame["block_size"] = frame["block_size"].fillna(0).astype(int)
+    if "forward_time_s" not in frame.columns:
+        frame["forward_time_s"] = float("nan")
+    return frame
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -15,23 +32,40 @@ def main():
     if not epoch_files or not batch_files:
         raise SystemExit(f"No results found under {root}")
 
-    epochs = pd.concat((pd.read_csv(path) for path in epoch_files), ignore_index=True)
-    batches = pd.concat((pd.read_csv(path) for path in batch_files), ignore_index=True)
-    keys = ["dataset", "model", "keep_ratio", "seed"]
-
-    final_epoch = epochs.sort_values("epoch").groupby(keys, as_index=False).tail(1)
-    per_run_batches = batches.groupby(keys, as_index=False).agg(
-        mean_backward_ms=("backward_time_s", lambda s: s.mean() * 1000.0),
-        mean_memory_mb=("memory_bytes", lambda s: s.mean() / (1024 ** 2)),
+    epochs = add_compatibility_columns(
+        pd.concat((pd.read_csv(path) for path in epoch_files), ignore_index=True)
     )
-    per_run = final_epoch.merge(per_run_batches, on=keys, how="inner")
+    batches = add_compatibility_columns(
+        pd.concat((pd.read_csv(path) for path in batch_files), ignore_index=True)
+    )
 
-    summary = per_run.groupby(["dataset", "model", "keep_ratio"], as_index=False).agg(
+    run_keys = [
+        "dataset",
+        "model",
+        "architecture",
+        "protocol_version",
+        "keep_ratio",
+        "block_size",
+        "seed",
+    ]
+    experiment_keys = run_keys[:-1]
+
+    final_epoch = epochs.sort_values("epoch").groupby(run_keys, as_index=False, dropna=False).tail(1)
+    per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(
+        mean_forward_ms=("forward_time_s", lambda values: values.mean() * 1000.0),
+        mean_backward_ms=("backward_time_s", lambda values: values.mean() * 1000.0),
+        mean_memory_mb=("memory_bytes", lambda values: values.mean() / (1024 ** 2)),
+    )
+    per_run = final_epoch.merge(per_run_batches, on=run_keys, how="inner")
+
+    summary = per_run.groupby(experiment_keys, as_index=False, dropna=False).agg(
         runs=("seed", "count"),
         val_accuracy_mean=("val_accuracy", "mean"),
         val_accuracy_std=("val_accuracy", "std"),
         train_accuracy_mean=("train_accuracy", "mean"),
         train_accuracy_std=("train_accuracy", "std"),
+        forward_ms_mean=("mean_forward_ms", "mean"),
+        forward_ms_std=("mean_forward_ms", "std"),
         backward_ms_mean=("mean_backward_ms", "mean"),
         backward_ms_std=("mean_backward_ms", "std"),
         memory_mb_mean=("mean_memory_mb", "mean"),
@@ -46,6 +80,7 @@ def main():
     print(summary.to_string(index=False))
     print()
     print(f"Saved: {output}")
+
 
 if __name__ == "__main__":
     main()

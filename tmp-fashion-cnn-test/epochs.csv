@@ -1,0 +1,2 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+7ab355e9a00c8711,fashion_mnist,dense,cnn,protocol-v3,1.0,0,1,1,2.0429477095603943,0.3125,1.5015243291854858,0.5703125,0.6216751250321977

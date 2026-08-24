@@ -1,5 +1,5 @@
-from models.common.mlp import PrunedMLP
-from ..config import INPUT_FEATURES, HIDDEN_DIMS, NUM_CLASSES
+from models.common.builders import build_pruning
+from .. import config
 
-def build(*, keep_ratio, **_):
-    return PrunedMLP(INPUT_FEATURES, HIDDEN_DIMS, NUM_CLASSES, keep_ratio)
+def build(*, keep_ratio, architecture="mlp", **_):
+    return build_pruning(config, keep_ratio, architecture)

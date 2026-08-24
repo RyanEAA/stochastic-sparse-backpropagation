@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+209ba02bde77eede,cifar100,ssb-v1,cnn,protocol-v3,0.6,0,5,1,4.037387230834961,0.08252,3.6207569274902345,0.1439,13.203178458032198
+209ba02bde77eede,cifar100,ssb-v1,cnn,protocol-v3,0.6,0,5,2,3.3551418533325195,0.18636,3.09732494430542,0.24,12.038118124997709
+209ba02bde77eede,cifar100,ssb-v1,cnn,protocol-v3,0.6,0,5,3,2.9131895249938964,0.27148,2.7990001350402833,0.2946,11.975391333980951

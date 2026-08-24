@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+1ad6f5c5da2e5806,cifar10,dropout,mlp,protocol-v3,1.0,0,2,1,1.7864934157562256,0.3926,1.562596146774292,0.443,5.966242041962687
+1ad6f5c5da2e5806,cifar10,dropout,mlp,protocol-v3,1.0,0,2,2,1.4783427992248535,0.47914,1.4666560123443604,0.4838,5.80860579200089
+1ad6f5c5da2e5806,cifar10,dropout,mlp,protocol-v3,1.0,0,2,3,1.3621380367660523,0.51916,1.4092545501708984,0.5081,5.8420829579699785

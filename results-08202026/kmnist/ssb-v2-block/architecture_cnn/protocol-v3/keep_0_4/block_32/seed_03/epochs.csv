@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+d34fe051f1d7c10f,kmnist,ssb-v2-block,cnn,protocol-v3,0.4,32,3,1,0.5243500899712245,0.8392,0.472587388420105,0.8537,5.4160980000160635
+d34fe051f1d7c10f,kmnist,ssb-v2-block,cnn,protocol-v3,0.4,32,3,2,0.18443591759204864,0.9437,0.34506911931037904,0.8966,5.159693166962825
+d34fe051f1d7c10f,kmnist,ssb-v2-block,cnn,protocol-v3,0.4,32,3,3,0.12638727280100187,0.9620166666666666,0.2906026454925537,0.9129,5.15185708401259

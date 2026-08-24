@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+bab823f0d83b68a1,cifar10,ssb-v2-block,mlp,protocol-v3,0.2,128,2,1,121.66812605834961,0.10944,119.75833482055664,0.1293,7.016013832995668
+bab823f0d83b68a1,cifar10,ssb-v2-block,mlp,protocol-v3,0.2,128,2,2,78.9235085546875,0.1173,80.03375598144531,0.1196,6.8530871660332195
+bab823f0d83b68a1,cifar10,ssb-v2-block,mlp,protocol-v3,0.2,128,2,3,115.03177076782227,0.11822,46.21680938720703,0.1129,6.885631332988851

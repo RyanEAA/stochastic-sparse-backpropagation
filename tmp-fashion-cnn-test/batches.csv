@@ -1,0 +1,5 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,batch,forward_time_s,backward_time_s,memory_bytes,batch_accuracy
+7ab355e9a00c8711,fashion_mnist,dense,cnn,protocol-v3,1.0,0,1,1,0,0.1326486250036396,0.3087202499737032,473055232,0.0859375
+7ab355e9a00c8711,fashion_mnist,dense,cnn,protocol-v3,1.0,0,1,1,1,0.0033593749976716936,0.0058108329540118575,487407616,0.2578125
+7ab355e9a00c8711,fashion_mnist,dense,cnn,protocol-v3,1.0,0,1,1,2,0.003061833034735173,0.005963583011180162,487751680,0.3359375
+7ab355e9a00c8711,fashion_mnist,dense,cnn,protocol-v3,1.0,0,1,1,3,0.0018920000293292105,0.003448750008828938,487751680,0.5703125

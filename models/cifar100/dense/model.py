@@ -1,5 +1,5 @@
-from models.common.mlp import DenseMLP
-from ..config import INPUT_FEATURES, HIDDEN_DIMS, NUM_CLASSES
+from models.common.builders import build_dense
+from .. import config
 
-def build(**_):
-    return DenseMLP(INPUT_FEATURES, HIDDEN_DIMS, NUM_CLASSES)
+def build(*, architecture="mlp", **_):
+    return build_dense(config, architecture)

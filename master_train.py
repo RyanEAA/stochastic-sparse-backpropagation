@@ -1,26 +1,166 @@
-"""Run many datasets/models while keeping raw results separated.
+"""Run meaningful experiment grids while keeping raw results separated by architecture.
 
-Dense runs once per seed. Keep-ratio models run once per
-(dataset, model, keep_ratio, seed). Means/std are NOT calculated here.
+Grid rules:
+- dense: one run per (dataset, architecture, seed)
+- dropout/pruning/neuron-level SSB: sweep keep ratio
+- block SSB: sweep keep ratio x block size
+
+SSB V0 is historical and intentionally excluded from the default model list. It can
+still be requested explicitly with ``--models ssb-v0 ...``.
+
+Means/std are NOT calculated here; run summarize_results.py after raw runs finish.
 """
 import argparse
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
-from data.loaders import SUPPORTED_DATASETS
-from models import AVAILABLE_MODELS
+from data.loaders import SUPPORTED_DATASETS, normalize_dataset_name
+from models import AVAILABLE_MODELS, AVAILABLE_ARCHITECTURES
+from train import PROTOCOL_VERSION
 
-DEFAULT_RATIOS = [1.0, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+# Five-point sweep used for the clean scaling benchmark.
+DEFAULT_RATIOS = [1.0, 0.8, 0.6, 0.4, 0.2]
+DEFAULT_BLOCK_SIZES = [8, 16, 32, 64, 128]
+DEFAULT_MODELS = [
+    "dense",
+    "dropout",
+    "pruning",
+    "ssb-v1",
+    "ssb-v2",
+    "ssb-v3",
+    "ssb-v1-block",
+    "ssb-v2-block",
+    "ssb-v3-block",
+]
+BLOCK_MODELS = {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"}
+
 
 def keep_dir(ratio):
     return f"keep_{str(ratio).replace('.', '_')}"
 
+
+def validate_args(args):
+    if args.runs < 1:
+        raise ValueError("--runs must be >= 1")
+    if args.epochs < 1:
+        raise ValueError("--epochs must be >= 1")
+    if args.batch_size < 1:
+        raise ValueError("--batch-size must be >= 1")
+    if args.lr <= 0:
+        raise ValueError("--lr must be > 0")
+    if args.subset < 0:
+        raise ValueError("--subset must be >= 0")
+    if args.num_workers < 0:
+        raise ValueError("--num-workers must be >= 0")
+    if any(ratio <= 0 or ratio > 1 for ratio in args.keep_ratios):
+        raise ValueError("all --keep-ratios must satisfy 0 < ratio <= 1")
+    if any(size < 1 for size in args.block_sizes):
+        raise ValueError("all --block-sizes must be >= 1")
+
+
+def build_jobs(args, datasets):
+    jobs = []
+
+    for dataset in datasets:
+        for architecture in args.architectures:
+            for model in args.models:
+                if model == "dense":
+                    # Dense has no keep-ratio or block-size dimension.
+                    configurations = [(1.0, 0)]
+                elif model in BLOCK_MODELS:
+                    # Block SSB varies across both keep ratio and block size.
+                    configurations = [
+                        (ratio, block_size)
+                        for ratio in args.keep_ratios
+                        for block_size in args.block_sizes
+                    ]
+                else:
+                    # Dropout, pruning, and neuron-level SSB vary only by keep ratio.
+                    configurations = [(ratio, 0) for ratio in args.keep_ratios]
+
+                for ratio, block_size in configurations:
+                    for seed in range(1, args.runs + 1):
+                        model_root = (
+                            args.results_dir
+                            / dataset
+                            / model
+                            / f"architecture_{architecture}"
+                            / args.protocol_version
+                        )
+
+                        if model == "dense":
+                            leaf = f"seed_{seed:02d}"
+                        elif model in BLOCK_MODELS:
+                            leaf = (
+                                f"{keep_dir(ratio)}/block_{block_size}/seed_{seed:02d}"
+                            )
+                        else:
+                            leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
+
+                        jobs.append(
+                            (
+                                dataset,
+                                architecture,
+                                model,
+                                ratio,
+                                block_size,
+                                seed,
+                                model_root / leaf,
+                            )
+                        )
+
+    return jobs
+
+
+def print_plan(jobs, args):
+    counts = Counter()
+    for _, _, model, _, _, _, _ in jobs:
+        if model == "dense":
+            counts["dense"] += 1
+        elif model in BLOCK_MODELS:
+            counts["block_ssb"] += 1
+        elif model in {"dropout", "pruning"}:
+            counts["baselines"] += 1
+        else:
+            counts["neuron_ssb"] += 1
+
+    print("Experiment plan")
+    print(f"  datasets:       {len(set(job[0] for job in jobs))}")
+    print(f"  architectures:  {len(set(job[1] for job in jobs))}")
+    print(f"  seeds/config:   {args.runs}")
+    print(f"  dense runs:     {counts['dense']}")
+    print(f"  baseline runs:  {counts['baselines']}")
+    print(f"  neuron SSB:     {counts['neuron_ssb']}")
+    print(f"  block SSB:      {counts['block_ssb']}")
+    print(f"Planned experiments: {len(jobs)}")
+
+    if "ssb-v0" not in args.models:
+        print("  note: ssb-v0 is historical and excluded unless explicitly requested")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--datasets", nargs="+", default=list(SUPPORTED_DATASETS))
-    parser.add_argument("--models", nargs="+", default=["dense", "dropout", "pruning", "ssb-v0", "ssb-v1", "ssb-v2"], choices=AVAILABLE_MODELS)
-    parser.add_argument("--keep-ratios", nargs="+", type=float, default=DEFAULT_RATIOS)
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=DEFAULT_MODELS,
+        choices=AVAILABLE_MODELS,
+    )
+    parser.add_argument(
+        "--architectures",
+        nargs="+",
+        default=list(AVAILABLE_ARCHITECTURES),
+        choices=AVAILABLE_ARCHITECTURES,
+    )
+    parser.add_argument(
+        "--keep-ratios", nargs="+", type=float, default=DEFAULT_RATIOS
+    )
+    parser.add_argument(
+        "--block-sizes", nargs="+", type=int, default=DEFAULT_BLOCK_SIZES
+    )
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -28,31 +168,37 @@ def main():
     parser.add_argument("--subset", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--protocol-version", default=PROTOCOL_VERSION)
+    parser.add_argument("--experiment-tag", default="")
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Print the planned grid without launching train.py")
     args = parser.parse_args()
 
-    jobs = []
-    for dataset in args.datasets:
-        for model in args.models:
-            ratios = [1.0] if model == "dense" else args.keep_ratios
-            for ratio in ratios:
-                for seed in range(1, args.runs + 1):
-                    leaf = f"seed_{seed:02d}" if model == "dense" else f"{keep_dir(ratio)}/seed_{seed:02d}"
-                    output_dir = args.results_dir / dataset / model / leaf
-                    jobs.append((dataset, model, ratio, seed, output_dir))
+    validate_args(args)
+    datasets = [normalize_dataset_name(dataset) for dataset in args.datasets]
+    jobs = build_jobs(args, datasets)
+    print_plan(jobs, args)
+    if args.dry_run:
+        return
 
-    print(f"Planned experiments: {len(jobs)}")
-    for index, (dataset, model, ratio, seed, output_dir) in enumerate(jobs, start=1):
-        if not args.force and (output_dir / "epochs.csv").exists() and (output_dir / "batches.csv").exists():
+    for index, (dataset, architecture, model, ratio, block_size, seed, output_dir) in enumerate(jobs, start=1):
+        required = [
+            output_dir / "epochs.csv",
+            output_dir / "batches.csv",
+            output_dir / "metadata.json",
+        ]
+        if not args.force and all(path.exists() for path in required):
             print(f"[{index}/{len(jobs)}] skip {output_dir}")
             continue
 
         command = [
-            sys.executable, "train.py",
+            sys.executable,
+            "train.py",
             "--dataset", dataset,
             "--model", model,
-            "--keep-ratio", str(ratio),
+            "--architecture", architecture,
             "--seed", str(seed),
             "--epochs", str(args.epochs),
             "--batch-size", str(args.batch_size),
@@ -60,14 +206,25 @@ def main():
             "--subset", str(args.subset),
             "--device", args.device,
             "--data-dir", args.data_dir,
+            "--num-workers", str(args.num_workers),
+            "--protocol-version", args.protocol_version,
+            "--experiment-tag", args.experiment_tag,
             "--output-dir", str(output_dir),
         ]
+
+        # Pass only parameters that are meaningful for this model family.
+        if model != "dense":
+            command.extend(["--keep-ratio", str(ratio)])
+        if model in BLOCK_MODELS:
+            command.extend(["--block-size", str(block_size)])
+
         print()
         print(f"[{index}/{len(jobs)}] {' '.join(command)}")
         subprocess.run(command, check=True)
 
     print()
     print("All requested raw runs complete. Run summarize_results.py afterwards.")
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+2083e3a157469fd0,fashion_mnist,ssb-v3-block,mlp,protocol-v3,0.4,32,1,1,1.9729171306610107,0.24041666666666667,5.796337517547608,0.6186,3.932285291957669
+2083e3a157469fd0,fashion_mnist,ssb-v3-block,mlp,protocol-v3,0.4,32,1,2,1.7935018355051677,0.3086333333333333,4.9849520137786865,0.7011,3.6400058749713935
+2083e3a157469fd0,fashion_mnist,ssb-v3-block,mlp,protocol-v3,0.4,32,1,3,1.718549629275004,0.33826666666666666,3.4107569677352907,0.7582,3.604213000042364
