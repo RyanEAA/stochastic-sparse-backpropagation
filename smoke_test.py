@@ -122,10 +122,74 @@ def one_step(dataset, architecture, model_name, num_classes):
     print(f"PASS {dataset} {architecture} {model_name}: loss={loss.item():.4f}")
 
 
+
+def test_v4_structured_child(dataset, architecture, num_classes):
+    shape = (4, 1, 28, 28) if dataset in {"mnist", "fashion_mnist", "kmnist"} else (4, 3, 32, 32)
+    x = torch.randn(*shape)
+    y = torch.randint(0, num_classes, (shape[0],))
+    model = build_model(
+        dataset, "ssb-v4", keep_ratio=0.5, architecture=architecture,
+        child_refresh_steps=2,
+    )
+    initialize_model_parameters(model, seed=1)
+    model.refresh_child()
+    assert model.child_parameter_count() < model.master_parameter_count()
+    model.train()
+    optimizer = torch.optim.Adam(model.training_parameters(), lr=1e-3)
+    output = model(x)
+    loss = nn.CrossEntropyLoss()(output, y)
+    loss.backward()
+    optimizer.step()
+    assert output.shape == (shape[0], num_classes)
+    assert not model.after_optimizer_step()
+    model.sync_child_to_master()
+    model.eval()
+    dense_output = model(x)
+    assert dense_output.shape == output.shape
+    print(
+        f"PASS {dataset} {architecture} ssb-v4: "
+        f"child/master params={model.child_parameter_count()/model.master_parameter_count():.3f}"
+    )
+
+
+def test_v5_master_optimizer_state(dataset, architecture, num_classes):
+    shape = (4, 1, 28, 28) if dataset in {"mnist", "fashion_mnist", "kmnist"} else (4, 3, 32, 32)
+    x = torch.randn(*shape)
+    y = torch.randint(0, num_classes, (shape[0],))
+    model = build_model(
+        dataset, "ssb-v5", keep_ratio=0.5, architecture=architecture,
+        child_refresh_steps=1,
+    )
+    initialize_model_parameters(model, seed=1)
+    model.refresh_child()
+    model.train()
+    optimizer = model.make_optimizer(1e-3)
+    output = model(x)
+    loss = nn.CrossEntropyLoss()(output, y)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+    new_optimizer = model.after_optimizer_step(optimizer, 1e-3)
+    assert new_optimizer is not optimizer
+    assert model.refresh_count == 2
+    assert model._master_adam_state
+    assert any(state["exp_avg"].abs().sum().item() > 0 for state in model._master_adam_state.values())
+    assert new_optimizer.state, "new child optimizer was not hydrated from master state"
+    model.sync_child_to_master()
+    model.eval()
+    dense_output = model(x)
+    assert dense_output.shape == output.shape
+    print(
+        f"PASS {dataset} {architecture} ssb-v5 refresh=1: "
+        f"master optimizer state persisted across child refresh"
+    )
+
 def main():
     expected = ("ssb-v0", "ssb-v1", "ssb-v2", "ssb-v3", "ssb-v1-block", "ssb-v2-block", "ssb-v3-block")
     assert tuple(SSB_LAYERS) == expected
     assert all(name in AVAILABLE_MODELS for name in expected)
+    assert "ssb-v4" in AVAILABLE_MODELS
+    assert "ssb-v5" in AVAILABLE_MODELS
 
     torch.manual_seed(10)
     x = torch.randn(4, 7)
@@ -148,8 +212,10 @@ def main():
         one_step("cifar10", architecture, "ssb-v1-block", 10)
         one_step("cifar10", architecture, "ssb-v2-block", 10)
         one_step("cifar10", architecture, "ssb-v3-block", 10)
+        test_v4_structured_child("cifar10", architecture, 10)
+        test_v5_master_optimizer_state("cifar10", architecture, 10)
 
-    print("PASS registry, V0/V1/V2 compatibility, V3/V3-block semantics, block structure, CNN/MLP wiring, and initialization parity")
+    print("PASS registry, V0/V1/V2 compatibility, V3/V3-block semantics, V4/V5 structured-child mechanics, V5 persistent Adam state, block structure, CNN/MLP wiring, and initialization parity")
 
 
 if __name__ == "__main__":

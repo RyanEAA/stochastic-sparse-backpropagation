@@ -9,12 +9,14 @@ def add_compatibility_columns(frame):
         "architecture": "historical_mlp",
         "protocol_version": "historical",
         "block_size": 0,
+        "child_refresh_steps": 0,
         "run_id": "",
     }
     for column, default in defaults.items():
         if column not in frame.columns:
             frame[column] = default
     frame["block_size"] = frame["block_size"].fillna(0).astype(int)
+    frame["child_refresh_steps"] = frame["child_refresh_steps"].fillna(0).astype(int)
     if "forward_time_s" not in frame.columns:
         frame["forward_time_s"] = float("nan")
     return frame
@@ -46,6 +48,7 @@ def main():
         "protocol_version",
         "keep_ratio",
         "block_size",
+        "child_refresh_steps",
         "seed",
     ]
     experiment_keys = run_keys[:-1]

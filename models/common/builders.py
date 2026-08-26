@@ -1,5 +1,7 @@
 from .mlp import DenseMLP, DropoutMLP, PrunedMLP, SparseMLP
 from .cnn import DenseCNN, DropoutCNN, PrunedCNN, SparseCNN
+from algorithms.ssb.v4 import StructuredChildModel
+from algorithms.ssb.v5 import StructuredChildModelV5
 
 
 def build_dense(config, architecture="mlp"):
@@ -78,3 +80,15 @@ def build_sparse(
             sparse_layer_kwargs=sparse_layer_kwargs,
         )
     raise ValueError(f"Unknown architecture {architecture!r}")
+
+
+def build_structured_child(config, keep_ratio, architecture="mlp", refresh_steps=100):
+    """Build SSB V4: full dense master + physically smaller structured child."""
+    master = build_dense(config, architecture)
+    return StructuredChildModel(master, keep_ratio=keep_ratio, refresh_steps=refresh_steps)
+
+
+def build_structured_child_v5(config, keep_ratio, architecture="mlp", refresh_steps=100):
+    """Build SSB V5: V4 structured child with master-owned persistent Adam state."""
+    master = build_dense(config, architecture)
+    return StructuredChildModelV5(master, keep_ratio=keep_ratio, refresh_steps=refresh_steps)

@@ -46,7 +46,7 @@ def make_run_id(config):
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
 
 
-def train_epoch(model, loader, optimizer, criterion, device, epoch):
+def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate):
     model.train()
     loss_sum = correct = total = 0
     batches = []
@@ -69,6 +69,13 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch):
         backward_time = time.perf_counter() - backward_start
         memory = memory_bytes(device)
         optimizer.step()
+        if getattr(model, "is_v5_structured_child", False):
+            optimizer = model.after_optimizer_step(optimizer, learning_rate)
+        elif hasattr(model, "after_optimizer_step") and model.after_optimizer_step():
+            # V4 creates a new physically smaller child; its Parameters are new objects.
+            # Rebuild Adam for the new child. This reset is recorded in metadata and is
+            # intentionally part of the V4 baseline.
+            optimizer = optim.Adam(model.training_parameters(), lr=learning_rate)
 
         n = y.size(0)
         loss_sum += loss.item() * n
@@ -86,11 +93,13 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch):
             )
         )
     synchronize(device)
-    return loss_sum / total, correct / total, time.perf_counter() - start, batches
+    return loss_sum / total, correct / total, time.perf_counter() - start, batches, optimizer
 
 
 @torch.no_grad()
 def evaluate(model, loader, criterion, device):
+    if hasattr(model, "sync_child_to_master"):
+        model.sync_child_to_master()
     model.eval()
     loss_sum = correct = total = 0
     for x, y in loader:
@@ -115,6 +124,7 @@ def main():
     parser.add_argument("--architecture", default="mlp", choices=AVAILABLE_ARCHITECTURES)
     parser.add_argument("--keep-ratio", type=float, default=1.0)
     parser.add_argument("--block-size", type=int, default=32)
+    parser.add_argument("--child-refresh-steps", type=int, default=100)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -133,6 +143,8 @@ def main():
         raise ValueError("keep_ratio must be in (0, 1].")
     if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} and args.block_size <= 0:
         raise ValueError("block_size must be positive for block SSB variants.")
+    if args.model in {"ssb-v4", "ssb-v5"} and args.child_refresh_steps <= 0:
+        raise ValueError("child_refresh_steps must be positive for ssb-v4.")
 
     set_seed(args.seed)
     device = get_device(args.device)
@@ -145,12 +157,19 @@ def main():
         args.keep_ratio,
         architecture=args.architecture,
         block_size=args.block_size,
+        child_refresh_steps=args.child_refresh_steps,
     )
     initialize_model_parameters(model, args.seed)
     model = model.to(device)
     set_seed(args.seed)
+    if hasattr(model, "refresh_child"):
+        model.refresh_child()
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer_parameters = model.training_parameters() if hasattr(model, "training_parameters") else model.parameters()
+    if getattr(model, "is_v5_structured_child", False):
+        optimizer = model.make_optimizer(args.lr)
+    else:
+        optimizer = optim.Adam(optimizer_parameters, lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     total_parameters, trainable_parameters = parameter_counts(model)
 
@@ -160,6 +179,7 @@ def main():
         "architecture": args.architecture,
         "keep_ratio": 1.0 if args.model == "dense" else args.keep_ratio,
         "block_size": args.block_size if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} else 0,
+        "child_refresh_steps": args.child_refresh_steps if args.model in {"ssb-v4", "ssb-v5"} else 0,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
@@ -186,7 +206,18 @@ def main():
         "git_commit": git_commit(),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "memory_metric": "cuda_peak_allocated_after_backward" if device.type == "cuda" else "process_rss_after_backward",
-        "cnn_scope": "dense_conv_backbone_ssb_linear_classifier" if args.architecture == "cnn" and args.model.startswith("ssb-") else None,
+        "cnn_scope": (
+            "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5"}
+            else "dense_conv_backbone_ssb_linear_classifier" if args.architecture == "cnn" and args.model.startswith("ssb-")
+            else None
+        ),
+        "structured_child_optimizer_state_policy": (
+            "adam_state_resets_when_child_is_resampled" if args.model == "ssb-v4"
+            else "master_owned_persistent_adam_moments" if args.model == "ssb-v5"
+            else None
+        ),
+        "structured_child_master_parameters": model.master_parameter_count() if hasattr(model, "master_parameter_count") else None,
+        "structured_child_initial_child_parameters": model.child_parameter_count() if hasattr(model, "child_parameter_count") else None,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
@@ -194,6 +225,7 @@ def main():
     print(
         f"dataset={dataset} model={args.model} architecture={args.architecture} "
         f"keep_ratio={identity['keep_ratio']} block_size={identity['block_size']} "
+        f"child_refresh_steps={identity['child_refresh_steps']} "
         f"seed={args.seed} device={device} run_id={run_id}"
     )
 
@@ -207,11 +239,12 @@ def main():
         "protocol_version": args.protocol_version,
         "keep_ratio": identity["keep_ratio"],
         "block_size": identity["block_size"],
+        "child_refresh_steps": identity["child_refresh_steps"],
         "seed": args.seed,
     }
     for epoch in range(1, args.epochs + 1):
-        train_loss, train_accuracy, epoch_time, batches = train_epoch(
-            model, train_loader, optimizer, criterion, device, epoch
+        train_loss, train_accuracy, epoch_time, batches, optimizer = train_epoch(
+            model, train_loader, optimizer, criterion, device, epoch, args.lr
         )
         val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
         print(
@@ -240,6 +273,7 @@ def main():
         "protocol_version",
         "keep_ratio",
         "block_size",
+        "child_refresh_steps",
         "seed",
     ]
     write_csv(
