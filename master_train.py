@@ -175,7 +175,7 @@ def main():
     parser.add_argument(
         "--block-sizes", nargs="+", type=int, default=DEFAULT_BLOCK_SIZES
     )
-    parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[100])
+    parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[1, 10, 25, 100], help="For V4/V5 only: resample the structured child exactly every N optimizer steps.")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=128)

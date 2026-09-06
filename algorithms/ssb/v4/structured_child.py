@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Sequence
 
+import hashlib
+
 import torch
 from torch import nn
 
@@ -133,7 +135,9 @@ class StructuredChildModel(nn.Module):
         self.child: nn.Module | None = None
         self._maps: List[LayerMap] = []
         self._steps_since_refresh = 0
+        self.optimizer_step_count = 0
         self.refresh_count = 0
+        self.last_refresh_step = 0
 
     def training_parameters(self):
         if self.child is None:
@@ -148,6 +152,17 @@ class StructuredChildModel(nn.Module):
             return 0
         return sum(p.numel() for p in self.child.parameters())
 
+    def topology_signature(self) -> str:
+        """Stable short fingerprint of the currently selected child topology."""
+        if not self._maps:
+            return ""
+        digest = hashlib.sha1()
+        for mapping in self._maps:
+            digest.update(mapping.kind.encode())
+            digest.update(mapping.out_idx.detach().cpu().contiguous().numpy().tobytes())
+            digest.update(mapping.in_idx.detach().cpu().contiguous().numpy().tobytes())
+        return digest.hexdigest()[:12]
+
     def refresh_child(self) -> None:
         if self.child is not None:
             self.sync_child_to_master()
@@ -160,6 +175,7 @@ class StructuredChildModel(nn.Module):
             raise TypeError(f"Unsupported dense master type for SSB V4: {type(self.master).__name__}")
         self._steps_since_refresh = 0
         self.refresh_count += 1
+        self.last_refresh_step = self.optimizer_step_count
 
     def sync_child_to_master(self) -> None:
         if self.child is None:
@@ -173,8 +189,10 @@ class StructuredChildModel(nn.Module):
                 raise RuntimeError(f"Unknown V4 mapping kind {mapping.kind!r}")
 
     def after_optimizer_step(self) -> bool:
-        self._steps_since_refresh += 1
-        if self._steps_since_refresh < self.refresh_steps:
+        """Refresh exactly every N optimizer steps, across epoch boundaries."""
+        self.optimizer_step_count += 1
+        self._steps_since_refresh = self.optimizer_step_count % self.refresh_steps
+        if self.optimizer_step_count % self.refresh_steps != 0:
             return False
         self.refresh_child()
         return True

@@ -46,11 +46,12 @@ def make_run_id(config):
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
 
 
-def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate):
+def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate, global_step_start=0):
     model.train()
     loss_sum = correct = total = 0
     batches = []
     start = time.perf_counter()
+    global_step = global_step_start
     for batch_index, (x, y) in enumerate(loader):
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad(set_to_none=True)
@@ -69,6 +70,9 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         backward_time = time.perf_counter() - backward_start
         memory = memory_bytes(device)
         optimizer.step()
+        global_step += 1
+        refresh_count_before = int(getattr(model, "refresh_count", 0))
+        topology_before = model.topology_signature() if hasattr(model, "topology_signature") else ""
         if getattr(model, "is_v5_structured_child", False):
             optimizer = model.after_optimizer_step(optimizer, learning_rate)
         elif hasattr(model, "after_optimizer_step") and model.after_optimizer_step():
@@ -76,6 +80,9 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
             # Rebuild Adam for the new child. This reset is recorded in metadata and is
             # intentionally part of the V4 baseline.
             optimizer = optim.Adam(model.training_parameters(), lr=learning_rate)
+        refresh_count_after = int(getattr(model, "refresh_count", 0))
+        topology_after = model.topology_signature() if hasattr(model, "topology_signature") else ""
+        child_refreshed = refresh_count_after > refresh_count_before
 
         n = y.size(0)
         loss_sum += loss.item() * n
@@ -90,10 +97,15 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 backward_time_s=backward_time,
                 memory_bytes=memory,
                 batch_accuracy=batch_correct / n,
+                global_step=global_step,
+                child_refreshed=int(child_refreshed),
+                child_refresh_count=refresh_count_after,
+                child_topology_before=topology_before,
+                child_topology_after=topology_after,
             )
         )
     synchronize(device)
-    return loss_sum / total, correct / total, time.perf_counter() - start, batches, optimizer
+    return loss_sum / total, correct / total, time.perf_counter() - start, batches, optimizer, global_step
 
 
 @torch.no_grad()
@@ -144,7 +156,7 @@ def main():
     if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} and args.block_size <= 0:
         raise ValueError("block_size must be positive for block SSB variants.")
     if args.model in {"ssb-v4", "ssb-v5"} and args.child_refresh_steps <= 0:
-        raise ValueError("child_refresh_steps must be positive for ssb-v4.")
+        raise ValueError("child_refresh_steps must be positive for ssb-v4/ssb-v5.")
 
     set_seed(args.seed)
     device = get_device(args.device)
@@ -242,9 +254,10 @@ def main():
         "child_refresh_steps": identity["child_refresh_steps"],
         "seed": args.seed,
     }
+    global_step = 0
     for epoch in range(1, args.epochs + 1):
-        train_loss, train_accuracy, epoch_time, batches, optimizer = train_epoch(
-            model, train_loader, optimizer, criterion, device, epoch, args.lr
+        train_loss, train_accuracy, epoch_time, batches, optimizer, global_step = train_epoch(
+            model, train_loader, optimizer, criterion, device, epoch, args.lr, global_step
         )
         val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
         print(
@@ -285,7 +298,7 @@ def main():
     write_csv(
         args.output_dir / "batches.csv",
         batch_rows,
-        common_fields + ["epoch", "batch", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy"],
+        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after"],
     )
 
 
