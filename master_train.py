@@ -32,6 +32,7 @@ DEFAULT_MODELS = [
     "ssb-v3",
     "ssb-v4",
     "ssb-v5",
+    "ssb-v5.1",
     "ssb-v1-block",
     "ssb-v2-block",
     "ssb-v3-block",
@@ -48,6 +49,12 @@ def validate_args(args):
         raise ValueError("--runs must be >= 1")
     if args.epochs < 1:
         raise ValueError("--epochs must be >= 1")
+    if args.max_epochs < 1:
+        raise ValueError("--max-epochs must be >= 1")
+    if args.patience < 1:
+        raise ValueError("--patience must be >= 1")
+    if args.min_delta < 0:
+        raise ValueError("--min-delta must be >= 0")
     if args.batch_size < 1:
         raise ValueError("--batch-size must be >= 1")
     if args.lr <= 0:
@@ -79,7 +86,7 @@ def build_jobs(args, datasets):
                         for ratio in args.keep_ratios
                         for block_size in args.block_sizes
                     ]
-                elif model in {"ssb-v4", "ssb-v5"}:
+                elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                     configurations = [
                         (ratio, 0, refresh_steps)
                         for ratio in args.keep_ratios
@@ -104,7 +111,7 @@ def build_jobs(args, datasets):
                             leaf = (
                                 f"{keep_dir(ratio)}/block_{block_size}/seed_{seed:02d}"
                             )
-                        elif model in {"ssb-v4", "ssb-v5"}:
+                        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
@@ -134,7 +141,7 @@ def print_plan(jobs, args):
             counts["block_ssb"] += 1
         elif model in {"dropout", "pruning"}:
             counts["baselines"] += 1
-        elif model in {"ssb-v4", "ssb-v5"}:
+        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
             counts["structured_child"] += 1
         else:
             counts["neuron_ssb"] += 1
@@ -146,7 +153,7 @@ def print_plan(jobs, args):
     print(f"  dense runs:     {counts['dense']}")
     print(f"  baseline runs:  {counts['baselines']}")
     print(f"  neuron SSB:     {counts['neuron_ssb']}")
-    print(f"  structured V4/5:{counts['structured_child']}")
+    print(f"  structured V4/5/5.1:{counts['structured_child']}")
     print(f"  block SSB:      {counts['block_ssb']}")
     print(f"Planned experiments: {len(jobs)}")
 
@@ -175,9 +182,13 @@ def main():
     parser.add_argument(
         "--block-sizes", nargs="+", type=int, default=DEFAULT_BLOCK_SIZES
     )
-    parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[100])
+    parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[1, 10, 25, 100], help="For V4/V5 only: resample the structured child exactly every N optimizer steps.")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--stop-at-convergence", action="store_true", help="Use validation-loss early stopping instead of a fixed epoch count.")
+    parser.add_argument("--max-epochs", type=int, default=100)
+    parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--subset", type=int, default=0)
@@ -216,6 +227,9 @@ def main():
             "--architecture", architecture,
             "--seed", str(seed),
             "--epochs", str(args.epochs),
+            "--max-epochs", str(args.max_epochs),
+            "--patience", str(args.patience),
+            "--min-delta", str(args.min_delta),
             "--batch-size", str(args.batch_size),
             "--lr", str(args.lr),
             "--subset", str(args.subset),
@@ -227,12 +241,15 @@ def main():
             "--output-dir", str(output_dir),
         ]
 
+        if args.stop_at_convergence:
+            command.append("--stop-at-convergence")
+
         # Pass only parameters that are meaningful for this model family.
         if model != "dense":
             command.extend(["--keep-ratio", str(ratio)])
         if model in BLOCK_MODELS:
             command.extend(["--block-size", str(block_size)])
-        if model in {"ssb-v4", "ssb-v5"}:
+        if model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
             command.extend(["--child-refresh-steps", str(refresh_steps)])
 
         print()

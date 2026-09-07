@@ -1,0 +1,10 @@
+INPUT_FEATURES = 784
+HIDDEN_DIMS = [300, 100]
+NUM_CLASSES = 10
+NOTE = 'Historical MNIST architecture used for the existing V0/V1/V2 results.'
+INPUT_CHANNELS = 1
+INPUT_SIZE = 28
+CNN_CHANNELS = [32, 64]
+CNN_CLASSIFIER_HIDDEN = [512]
+CNN_POOLED_SIZE = None
+ARCHITECTURES = ("mlp", "cnn")

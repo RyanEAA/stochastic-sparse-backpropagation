@@ -53,13 +53,26 @@ def main():
     ]
     experiment_keys = run_keys[:-1]
 
-    final_epoch = epochs.sort_values("epoch").groupby(run_keys, as_index=False, dropna=False).tail(1)
-    per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(
-        mean_forward_ms=("forward_time_s", lambda values: values.mean() * 1000.0),
-        mean_backward_ms=("backward_time_s", lambda values: values.mean() * 1000.0),
-        mean_memory_mb=("memory_bytes", lambda values: values.mean() / (1024 ** 2)),
+    # For convergence experiments, report model quality at the best validation-loss epoch
+    # while separately measuring the full cost paid until the stopping point.
+    best_indices = epochs.groupby(run_keys, dropna=False)["val_loss"].idxmin()
+    selected_epoch = epochs.loc[best_indices].copy()
+    selected_epoch = selected_epoch.rename(columns={"epoch": "best_epoch"})
+
+    run_training = epochs.groupby(run_keys, as_index=False, dropna=False).agg(
+        epochs_completed=("epoch", "max"),
+        total_training_time_s=("epoch_time_s", "sum"),
+        mean_epoch_time_s=("epoch_time_s", "mean"),
     )
-    per_run = final_epoch.merge(per_run_batches, on=run_keys, how="inner")
+    batch_aggs = {
+        "mean_forward_ms": ("forward_time_s", lambda values: values.mean() * 1000.0),
+        "mean_backward_ms": ("backward_time_s", lambda values: values.mean() * 1000.0),
+        "mean_memory_mb": ("memory_bytes", lambda values: values.mean() / (1024 ** 2)),
+    }
+    if "child_refreshed" in batches.columns:
+        batch_aggs["child_refresh_events"] = ("child_refreshed", "sum")
+    per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(**batch_aggs)
+    per_run = selected_epoch.merge(run_training, on=run_keys, how="inner").merge(per_run_batches, on=run_keys, how="inner")
 
     summary = per_run.groupby(experiment_keys, as_index=False, dropna=False).agg(
         runs=("seed", "count"),
@@ -73,8 +86,18 @@ def main():
         backward_ms_std=("mean_backward_ms", "std"),
         memory_mb_mean=("mean_memory_mb", "mean"),
         memory_mb_std=("mean_memory_mb", "std"),
-        epoch_time_mean=("epoch_time_s", "mean"),
-        epoch_time_std=("epoch_time_s", "std"),
+        epoch_time_mean=("mean_epoch_time_s", "mean"),
+        epoch_time_std=("mean_epoch_time_s", "std"),
+        best_epoch_mean=("best_epoch", "mean"),
+        best_epoch_std=("best_epoch", "std"),
+        epochs_completed_mean=("epochs_completed", "mean"),
+        epochs_completed_std=("epochs_completed", "std"),
+        total_training_time_mean=("total_training_time_s", "mean"),
+        total_training_time_std=("total_training_time_s", "std"),
+        **({
+            "child_refresh_events_mean": ("child_refresh_events", "mean"),
+            "child_refresh_events_std": ("child_refresh_events", "std"),
+        } if "child_refresh_events" in per_run.columns else {}),
     )
 
     output = root / "summary.csv"

@@ -1,0 +1,4 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s
+d063fe5cff9eb0a5,mnist,ssb-v4,mlp,protocol-v5,0.6,0,10,3,1,0.5928660457928976,0.8337,0.5704094767898321,0.901,2.4192850419785827
+d063fe5cff9eb0a5,mnist,ssb-v4,mlp,protocol-v5,0.6,0,10,3,2,0.2794615842103958,0.9169833333333334,0.36631254995539786,0.9384,2.3000003749039024
+d063fe5cff9eb0a5,mnist,ssb-v4,mlp,protocol-v5,0.6,0,10,3,3,0.21332590250174205,0.9370666666666667,0.28248727768985554,0.9545,2.2465412080055103

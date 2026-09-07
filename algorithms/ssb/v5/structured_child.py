@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Sequence
 
+import hashlib
+
 import torch
 from torch import nn
 from torch import optim
@@ -135,7 +137,9 @@ class StructuredChildModelV5(nn.Module):
         self.child: nn.Module | None = None
         self._maps: List[LayerMap] = []
         self._steps_since_refresh = 0
+        self.optimizer_step_count = 0
         self.refresh_count = 0
+        self.last_refresh_step = 0
         # Persistent Adam state lives in dense-master tensor shapes.
         # Keys are master Parameter objects; inactive slices retain their moments.
         self._master_adam_state = {}
@@ -153,6 +157,17 @@ class StructuredChildModelV5(nn.Module):
             return 0
         return sum(p.numel() for p in self.child.parameters())
 
+    def topology_signature(self) -> str:
+        """Stable short fingerprint of the currently selected child topology."""
+        if not self._maps:
+            return ""
+        digest = hashlib.sha1()
+        for mapping in self._maps:
+            digest.update(mapping.kind.encode())
+            digest.update(mapping.out_idx.detach().cpu().contiguous().numpy().tobytes())
+            digest.update(mapping.in_idx.detach().cpu().contiguous().numpy().tobytes())
+        return digest.hexdigest()[:12]
+
     def refresh_child(self) -> None:
         if self.child is not None:
             self.sync_child_to_master()
@@ -165,6 +180,7 @@ class StructuredChildModelV5(nn.Module):
             raise TypeError(f"Unsupported dense master type for SSB V5: {type(self.master).__name__}")
         self._steps_since_refresh = 0
         self.refresh_count += 1
+        self.last_refresh_step = self.optimizer_step_count
 
     def sync_child_to_master(self) -> None:
         if self.child is None:
@@ -241,10 +257,11 @@ class StructuredChildModelV5(nn.Module):
                     self._scatter_state_tensor(master_state["exp_avg_sq"], child_state["exp_avg_sq"], mapping, attr == "bias")
 
     def after_optimizer_step(self, optimizer, learning_rate: float):
-        # Persist moments after every update so refresh=1 is a first-class configuration.
+        """Persist Adam state and refresh exactly every N optimizer steps."""
         self.sync_optimizer_state_to_master(optimizer)
-        self._steps_since_refresh += 1
-        if self._steps_since_refresh < self.refresh_steps:
+        self.optimizer_step_count += 1
+        self._steps_since_refresh = self.optimizer_step_count % self.refresh_steps
+        if self.optimizer_step_count % self.refresh_steps != 0:
             return optimizer
         self.refresh_child()
         return self.make_optimizer(learning_rate)
