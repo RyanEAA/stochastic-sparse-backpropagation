@@ -1,2 +1,0 @@
-run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
-6f2ea6376c135f29,fashion_mnist,ssb-v5,cnn,protocol-convergence-v1,0.7,0,1,1,1,0.6984319919586182,0.74855,0.68123345246315,0.8458,34.765978000010364,1,1,0
