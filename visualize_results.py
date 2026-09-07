@@ -95,6 +95,24 @@ def main():
             f"{prefix}: wall-clock epoch time by configuration",
             directory / "epoch_time_bars.png",
         )
+        if "total_training_time_mean" in group.columns:
+            bar_metric(
+                group,
+                "total_training_time_mean",
+                "total_training_time_std",
+                "Total training time to stop (s)",
+                f"{prefix}: wall-clock training time to convergence/stop",
+                directory / "total_training_time_bars.png",
+            )
+        if "epochs_completed_mean" in group.columns:
+            bar_metric(
+                group,
+                "epochs_completed_mean",
+                "epochs_completed_std",
+                "Epochs completed",
+                f"{prefix}: epochs until convergence/stop",
+                directory / "epochs_completed_bars.png",
+            )
         bar_metric(
             group,
             "memory_mb_mean",

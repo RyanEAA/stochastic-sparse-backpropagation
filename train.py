@@ -137,7 +137,11 @@ def main():
     parser.add_argument("--keep-ratio", type=float, default=1.0)
     parser.add_argument("--block-size", type=int, default=32)
     parser.add_argument("--child-refresh-steps", type=int, default=100)
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=3, help="Fixed epoch count when --stop-at-convergence is not used.")
+    parser.add_argument("--stop-at-convergence", action="store_true", help="Stop when validation loss has not improved by --min-delta for --patience epochs.")
+    parser.add_argument("--max-epochs", type=int, default=100, help="Safety cap when --stop-at-convergence is enabled.")
+    parser.add_argument("--patience", type=int, default=8, help="Early-stopping patience in validation epochs.")
+    parser.add_argument("--min-delta", type=float, default=1e-4, help="Minimum validation-loss decrease counted as improvement.")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=0)
@@ -155,8 +159,14 @@ def main():
         raise ValueError("keep_ratio must be in (0, 1].")
     if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} and args.block_size <= 0:
         raise ValueError("block_size must be positive for block SSB variants.")
-    if args.model in {"ssb-v4", "ssb-v5"} and args.child_refresh_steps <= 0:
-        raise ValueError("child_refresh_steps must be positive for ssb-v4/ssb-v5.")
+    if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} and args.child_refresh_steps <= 0:
+        raise ValueError("child_refresh_steps must be positive for structured-child variants.")
+    if args.stop_at_convergence and args.max_epochs < 1:
+        raise ValueError("max_epochs must be >= 1.")
+    if args.stop_at_convergence and args.patience < 1:
+        raise ValueError("patience must be >= 1.")
+    if args.min_delta < 0:
+        raise ValueError("min_delta must be >= 0.")
 
     set_seed(args.seed)
     device = get_device(args.device)
@@ -191,11 +201,15 @@ def main():
         "architecture": args.architecture,
         "keep_ratio": 1.0 if args.model == "dense" else args.keep_ratio,
         "block_size": args.block_size if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} else 0,
-        "child_refresh_steps": args.child_refresh_steps if args.model in {"ssb-v4", "ssb-v5"} else 0,
+        "child_refresh_steps": args.child_refresh_steps if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} else 0,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
+        "stop_at_convergence": bool(args.stop_at_convergence),
+        "max_epochs": args.max_epochs if args.stop_at_convergence else args.epochs,
+        "patience": args.patience if args.stop_at_convergence else 0,
+        "min_delta": args.min_delta if args.stop_at_convergence else 0.0,
         "learning_rate": args.lr,
         "subset": args.subset,
     }
@@ -220,16 +234,22 @@ def main():
         "memory_metric": "cuda_peak_allocated_after_backward" if device.type == "cuda" else "process_rss_after_backward",
         "cnn_scope": (
             "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5"}
+            else "dense_forward_structured_backward_conv_and_classifier" if args.architecture == "cnn" and args.model == "ssb-v5.1"
             else "dense_conv_backbone_ssb_linear_classifier" if args.architecture == "cnn" and args.model.startswith("ssb-")
             else None
         ),
         "structured_child_optimizer_state_policy": (
             "adam_state_resets_when_child_is_resampled" if args.model == "ssb-v4"
-            else "master_owned_persistent_adam_moments" if args.model == "ssb-v5"
+            else "master_owned_persistent_adam_moments" if args.model in {"ssb-v5", "ssb-v5.1"}
             else None
         ),
         "structured_child_master_parameters": model.master_parameter_count() if hasattr(model, "master_parameter_count") else None,
         "structured_child_initial_child_parameters": model.child_parameter_count() if hasattr(model, "child_parameter_count") else None,
+        "forward_backward_policy": (
+            "dense_forward_structured_sparse_backward" if args.model == "ssb-v5.1"
+            else "structured_child_forward_and_backward" if args.model in {"ssb-v4", "ssb-v5"}
+            else "dense_standard" if args.model == "dense" else None
+        ),
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
@@ -255,14 +275,31 @@ def main():
         "seed": args.seed,
     }
     global_step = 0
-    for epoch in range(1, args.epochs + 1):
+    best_val_loss = float("inf")
+    best_epoch = 0
+    epochs_without_improvement = 0
+    stop_reason = "fixed_epochs"
+    epoch_limit = args.max_epochs if args.stop_at_convergence else args.epochs
+    training_wall_start = time.perf_counter()
+
+    for epoch in range(1, epoch_limit + 1):
         train_loss, train_accuracy, epoch_time, batches, optimizer, global_step = train_epoch(
             model, train_loader, optimizer, criterion, device, epoch, args.lr, global_step
         )
         val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+
+        improved = val_loss < (best_val_loss - args.min_delta)
+        if improved:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
         print(
             f"Epoch {epoch}: train_loss={train_loss:.4f} train_acc={train_accuracy:.4f} "
-            f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f} time={epoch_time:.2f}s"
+            f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f} time={epoch_time:.2f}s "
+            f"best_epoch={best_epoch} no_improve={epochs_without_improvement}"
         )
         epoch_rows.append(
             {
@@ -273,10 +310,32 @@ def main():
                 "val_loss": val_loss,
                 "val_accuracy": val_accuracy,
                 "epoch_time_s": epoch_time,
+                "is_best_val_loss": int(improved),
+                "best_epoch_so_far": best_epoch,
+                "epochs_without_improvement": epochs_without_improvement,
             }
         )
         for row in batches:
             batch_rows.append({**csv_base, **row})
+
+        if args.stop_at_convergence and epochs_without_improvement >= args.patience:
+            stop_reason = "validation_loss_patience"
+            print(f"Convergence stop at epoch {epoch}: no validation-loss improvement > {args.min_delta:g} for {args.patience} epochs.")
+            break
+    else:
+        if args.stop_at_convergence:
+            stop_reason = "max_epochs"
+
+    total_training_wall_time_s = time.perf_counter() - training_wall_start
+    metadata.update({
+        "epochs_completed": len(epoch_rows),
+        "best_epoch": best_epoch,
+        "best_val_loss": best_val_loss,
+        "stop_reason": stop_reason,
+        "total_training_wall_time_s": total_training_wall_time_s,
+        "converged_by_patience": stop_reason == "validation_loss_patience",
+    })
+    (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
 
     common_fields = [
         "run_id",
@@ -293,7 +352,7 @@ def main():
         args.output_dir / "epochs.csv",
         epoch_rows,
         common_fields
-        + ["epoch", "train_loss", "train_accuracy", "val_loss", "val_accuracy", "epoch_time_s"],
+        + ["epoch", "train_loss", "train_accuracy", "val_loss", "val_accuracy", "epoch_time_s", "is_best_val_loss", "best_epoch_so_far", "epochs_without_improvement"],
     )
     write_csv(
         args.output_dir / "batches.csv",

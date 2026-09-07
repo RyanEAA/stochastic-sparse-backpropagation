@@ -7,6 +7,12 @@ __pycache__/
 venv/
 env/
 
-# MNIST data
-MNIST/
-data/
+# Data
+data/MNIST/
+data/FashionMNIST/
+data/KMNIST/
+data/cifar-10-batches-py/
+data/cifar-100-python/
+data/svhn/
+*.tar.gz
+*.mat

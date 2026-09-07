@@ -2,6 +2,7 @@ from .mlp import DenseMLP, DropoutMLP, PrunedMLP, SparseMLP
 from .cnn import DenseCNN, DropoutCNN, PrunedCNN, SparseCNN
 from algorithms.ssb.v4 import StructuredChildModel
 from algorithms.ssb.v5 import StructuredChildModelV5
+from algorithms.ssb.v5_1 import StructuredBackwardModelV51
 
 
 def build_dense(config, architecture="mlp"):
@@ -92,3 +93,9 @@ def build_structured_child_v5(config, keep_ratio, architecture="mlp", refresh_st
     """Build SSB V5: V4 structured child with master-owned persistent Adam state."""
     master = build_dense(config, architecture)
     return StructuredChildModelV5(master, keep_ratio=keep_ratio, refresh_steps=refresh_steps)
+
+
+def build_structured_backward_v51(config, keep_ratio, architecture="mlp", refresh_steps=100):
+    """Build SSB V5.1: full dense forward + structured smaller backward surrogate."""
+    master = build_dense(config, architecture)
+    return StructuredBackwardModelV51(master, keep_ratio=keep_ratio, refresh_steps=refresh_steps)
