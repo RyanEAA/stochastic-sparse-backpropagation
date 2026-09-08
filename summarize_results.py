@@ -10,6 +10,9 @@ def add_compatibility_columns(frame):
         "protocol_version": "historical",
         "block_size": 0,
         "child_refresh_steps": 0,
+        "score_refresh_steps": 0,
+        "v6_gradient_retention": float("nan"),
+        "v6_selection_mode": "none",
         "run_id": "",
     }
     for column, default in defaults.items():
@@ -17,6 +20,7 @@ def add_compatibility_columns(frame):
             frame[column] = default
     frame["block_size"] = frame["block_size"].fillna(0).astype(int)
     frame["child_refresh_steps"] = frame["child_refresh_steps"].fillna(0).astype(int)
+    frame["score_refresh_steps"] = frame["score_refresh_steps"].fillna(0).astype(int)
     if "forward_time_s" not in frame.columns:
         frame["forward_time_s"] = float("nan")
     return frame
@@ -49,6 +53,9 @@ def main():
         "keep_ratio",
         "block_size",
         "child_refresh_steps",
+        "score_refresh_steps",
+        "v6_gradient_retention",
+        "v6_selection_mode",
         "seed",
     ]
     experiment_keys = run_keys[:-1]
@@ -71,6 +78,14 @@ def main():
     }
     if "child_refreshed" in batches.columns:
         batch_aggs["child_refresh_events"] = ("child_refreshed", "sum")
+    if "gradient_scoring_event" in batches.columns:
+        batch_aggs["gradient_scoring_events"] = ("gradient_scoring_event", "sum")
+        batch_aggs["dense_scoring_time_s"] = ("dense_scoring_time_s", "sum")
+        batch_aggs["child_rebuild_time_s"] = ("child_rebuild_time_s", "sum")
+    if "effective_keep_ratio" in batches.columns:
+        batch_aggs["effective_keep_ratio_mean"] = ("effective_keep_ratio", "mean")
+        batch_aggs["effective_keep_ratio_min"] = ("effective_keep_ratio", "min")
+        batch_aggs["effective_keep_ratio_max"] = ("effective_keep_ratio", "max")
     per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(**batch_aggs)
     per_run = selected_epoch.merge(run_training, on=run_keys, how="inner").merge(per_run_batches, on=run_keys, how="inner")
 
@@ -98,6 +113,16 @@ def main():
             "child_refresh_events_mean": ("child_refresh_events", "mean"),
             "child_refresh_events_std": ("child_refresh_events", "std"),
         } if "child_refresh_events" in per_run.columns else {}),
+        **({
+            "gradient_scoring_events_mean": ("gradient_scoring_events", "mean"),
+            "dense_scoring_time_mean": ("dense_scoring_time_s", "mean"),
+            "child_rebuild_time_mean": ("child_rebuild_time_s", "mean"),
+        } if "gradient_scoring_events" in per_run.columns else {}),
+        **({
+            "effective_keep_ratio_mean": ("effective_keep_ratio_mean", "mean"),
+            "effective_keep_ratio_min": ("effective_keep_ratio_min", "mean"),
+            "effective_keep_ratio_max": ("effective_keep_ratio_max", "mean"),
+        } if "effective_keep_ratio_mean" in per_run.columns else {}),
     )
 
     output = root / "summary.csv"

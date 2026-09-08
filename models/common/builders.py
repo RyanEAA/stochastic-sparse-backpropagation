@@ -3,6 +3,7 @@ from .cnn import DenseCNN, DropoutCNN, PrunedCNN, SparseCNN
 from algorithms.ssb.v4 import StructuredChildModel
 from algorithms.ssb.v5 import StructuredChildModelV5
 from algorithms.ssb.v5_1 import StructuredBackwardModelV51
+from algorithms.ssb.v6 import GradientSelectedChildModelV6
 
 
 def build_dense(config, architecture="mlp"):
@@ -99,3 +100,15 @@ def build_structured_backward_v51(config, keep_ratio, architecture="mlp", refres
     """Build SSB V5.1: full dense forward + structured smaller backward surrogate."""
     master = build_dense(config, architecture)
     return StructuredBackwardModelV51(master, keep_ratio=keep_ratio, refresh_steps=refresh_steps)
+
+
+def build_gradient_selected_v6(
+    config, keep_ratio, architecture="mlp", score_refresh_steps=100,
+    selection_mode="fixed", gradient_retention=0.90,
+):
+    """Build SSB V6 Stage 2: dense gradient scoring + top-k V5-style child."""
+    master = build_dense(config, architecture)
+    return GradientSelectedChildModelV6(
+        master, keep_ratio=keep_ratio, score_refresh_steps=score_refresh_steps,
+        selection_mode=selection_mode, gradient_retention=gradient_retention,
+    )

@@ -1,59 +1,73 @@
-"""Dataset loading used by the training harness.
-
-This deliberately contains data loading only. Dataset-specific model shapes live
-under models/<dataset>/config.py.
-"""
+"""Deterministic torchvision loaders for the six benchmark datasets."""
 from pathlib import Path
+
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
-ALIASES = {
-    "mnist": "mnist",
-    "fashion-mnist": "fashion_mnist", "fashion_mnist": "fashion_mnist", "fashionmnist": "fashion_mnist",
-    "kmnist": "kmnist",
-    "cifar10": "cifar10", "cifar-10": "cifar10",
-    "cifar100": "cifar100", "cifar-100": "cifar100",
-    "svhn": "svhn",
-}
+SUPPORTED_DATASETS = (
+    "mnist", "fashion_mnist", "kmnist", "cifar10", "cifar100", "svhn"
+)
 
-SUPPORTED_DATASETS = tuple(sorted(set(ALIASES.values())))
 
 def normalize_dataset_name(name: str) -> str:
-    key = name.lower()
-    if key not in ALIASES:
-        raise ValueError(f"Unsupported dataset {name!r}. Available: {', '.join(SUPPORTED_DATASETS)}")
-    return ALIASES[key]
+    normalized = name.lower().strip().replace("-", "_")
+    aliases = {"fashionmnist": "fashion_mnist", "fashion": "fashion_mnist"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in SUPPORTED_DATASETS:
+        raise ValueError(
+            f"Unknown dataset {name!r}. Available: {', '.join(SUPPORTED_DATASETS)}"
+        )
+    return normalized
 
-def get_datasets(name: str, data_dir: str = "data"):
-    name = normalize_dataset_name(name)
-    root = str(Path(data_dir))
+
+def _datasets(name: str, root: Path):
+    transform = transforms.ToTensor()
     if name == "mnist":
-        t = transforms.ToTensor()
-        return datasets.MNIST(root, train=True, download=True, transform=t), datasets.MNIST(root, train=False, download=True, transform=t)
+        return (
+            datasets.MNIST(root, train=True, download=True, transform=transform),
+            datasets.MNIST(root, train=False, download=True, transform=transform),
+        )
     if name == "fashion_mnist":
-        t = transforms.ToTensor()
-        return datasets.FashionMNIST(root, train=True, download=True, transform=t), datasets.FashionMNIST(root, train=False, download=True, transform=t)
+        return (
+            datasets.FashionMNIST(root, train=True, download=True, transform=transform),
+            datasets.FashionMNIST(root, train=False, download=True, transform=transform),
+        )
     if name == "kmnist":
-        t = transforms.ToTensor()
-        return datasets.KMNIST(root, train=True, download=True, transform=t), datasets.KMNIST(root, train=False, download=True, transform=t)
+        return (
+            datasets.KMNIST(root, train=True, download=True, transform=transform),
+            datasets.KMNIST(root, train=False, download=True, transform=transform),
+        )
     if name == "cifar10":
-        t = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.4914,0.4822,0.4465),(0.2023,0.1994,0.2010))])
-        return datasets.CIFAR10(root, train=True, download=True, transform=t), datasets.CIFAR10(root, train=False, download=True, transform=t)
+        return (
+            datasets.CIFAR10(root, train=True, download=True, transform=transform),
+            datasets.CIFAR10(root, train=False, download=True, transform=transform),
+        )
     if name == "cifar100":
-        t = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5071,0.4867,0.4408),(0.2675,0.2565,0.2761))])
-        return datasets.CIFAR100(root, train=True, download=True, transform=t), datasets.CIFAR100(root, train=False, download=True, transform=t)
-    if name == "svhn":
-        t = transforms.ToTensor()
-        return datasets.SVHN(root, split="train", download=True, transform=t), datasets.SVHN(root, split="test", download=True, transform=t)
-    raise AssertionError(name)
+        return (
+            datasets.CIFAR100(root, train=True, download=True, transform=transform),
+            datasets.CIFAR100(root, train=False, download=True, transform=transform),
+        )
+    return (
+        datasets.SVHN(root, split="train", download=True, transform=transform),
+        datasets.SVHN(root, split="test", download=True, transform=transform),
+    )
 
-def build_loaders(name, batch_size=128, seed=0, subset=0, data_dir="data", num_workers=0):
-    train_ds, val_ds = get_datasets(name, data_dir)
-    if subset > 0:
-        train_ds = Subset(train_ds, range(min(subset, len(train_ds))))
-        val_ds = Subset(val_ds, range(max(1, min(subset // 4, len(val_ds)))))
+
+def _deterministic_subset(dataset, size: int, seed: int):
+    if size <= 0 or size >= len(dataset):
+        return dataset
     generator = torch.Generator().manual_seed(seed)
-    train = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=generator, num_workers=num_workers)
-    val = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    return train, val
+    indices = torch.randperm(len(dataset), generator=generator)[:size].tolist()
+    return Subset(dataset, indices)
+
+
+def build_loaders(name, batch_size, seed, subset, data_dir, num_workers):
+    name = normalize_dataset_name(name)
+    train_set, val_set = _datasets(name, Path(data_dir))
+    train_set = _deterministic_subset(train_set, subset, seed)
+    generator = torch.Generator().manual_seed(seed)
+    common = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=False)
+    train_loader = DataLoader(train_set, shuffle=True, generator=generator, **common)
+    val_loader = DataLoader(val_set, shuffle=False, **common)
+    return train_loader, val_loader

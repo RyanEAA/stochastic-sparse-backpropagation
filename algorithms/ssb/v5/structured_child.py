@@ -280,6 +280,23 @@ class StructuredChildModelV5(nn.Module):
             return self.child(x)
         return self.master(x)
 
+    def _select_out_indices(
+        self,
+        master_layer: nn.Module,
+        *,
+        is_output: bool,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Select structured outputs while preserving V5's random policy.
+
+        Subclasses may override this hook to provide another structured selection
+        policy without duplicating the child construction and state-mapping code.
+        """
+        total = master_layer.out_features if isinstance(master_layer, nn.Linear) else master_layer.out_channels
+        if is_output:
+            return torch.arange(total, device=device, dtype=torch.long)
+        return _choose_indices(total, self.keep_ratio, device)
+
     def _build_mlp_child(self) -> nn.Module:
         master_layers = [m for m in self.master.net if isinstance(m, nn.Linear)]
         device = master_layers[0].weight.device
@@ -287,10 +304,8 @@ class StructuredChildModelV5(nn.Module):
         child_layers = []
         for i, master_layer in enumerate(master_layers):
             is_output = i == len(master_layers) - 1
-            out_idx = (
-                torch.arange(master_layer.out_features, device=device)
-                if is_output
-                else _choose_indices(master_layer.out_features, self.keep_ratio, device)
+            out_idx = self._select_out_indices(
+                master_layer, is_output=is_output, device=device
             )
             child_layer = _copy_linear(master_layer, out_idx, in_idx)
             child_layers.append(child_layer)
@@ -307,7 +322,9 @@ class StructuredChildModelV5(nn.Module):
         current_in = torch.arange(convs[0].in_channels, device=device)
         selected_by_conv = []
         for conv in convs:
-            out_idx = _choose_indices(conv.out_channels, self.keep_ratio, device)
+            out_idx = self._select_out_indices(
+                conv, is_output=False, device=device
+            )
             selected_by_conv.append((conv, current_in, out_idx))
             current_in = out_idx
 
@@ -344,10 +361,8 @@ class StructuredChildModelV5(nn.Module):
         child_linears = []
         for i, master_linear in enumerate(master_linears):
             is_output = i == len(master_linears) - 1
-            out_idx = (
-                torch.arange(master_linear.out_features, device=device)
-                if is_output
-                else _choose_indices(master_linear.out_features, self.keep_ratio, device)
+            out_idx = self._select_out_indices(
+                master_linear, is_output=is_output, device=device
             )
             child_linear = _copy_linear(master_linear, out_idx, in_idx)
             child_linears.append(child_linear)

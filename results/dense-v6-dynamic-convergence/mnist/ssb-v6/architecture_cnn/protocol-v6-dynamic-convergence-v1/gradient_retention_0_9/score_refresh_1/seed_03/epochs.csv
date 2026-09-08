@@ -1,0 +1,12 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,score_refresh_steps,v6_selection_mode,v6_gradient_retention,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,1,0.5602852413972219,0.83325,0.18479142726063727,0.9458,44.389948333002394,1,1,0
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,2,0.24544654713869093,0.9354833333333333,0.11179986345227808,0.9706,40.055802041999414,1,2,0
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,3,0.26813300483226776,0.9266166666666666,0.09721293519539759,0.9726,32.37838529099827,1,3,0
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,4,0.2945505318323771,0.9140833333333334,0.10199153715211433,0.9748,24.607826666004257,0,3,1
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,5,0.361064351606369,0.8936666666666667,0.10603689835760452,0.9748,24.394853500001773,0,3,2
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,6,0.37022833706537883,0.8892833333333333,0.11542899861704209,0.9764,21.616150292000384,0,3,3
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,7,0.41896053409576417,0.8753166666666666,0.12601176239468623,0.9743,20.7129484160032,0,3,4
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,8,0.42469316205183666,0.8719666666666667,0.11619367990409701,0.9775,19.763258874998428,0,3,5
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,9,0.4163162944873174,0.8737166666666667,0.11906371605588792,0.9764,19.679647959004797,0,3,6
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,10,0.432193066072464,0.8682833333333333,0.1260268532477281,0.9769,19.470237624998845,0,3,7
+e436213f328a608d,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,3,11,0.41329056550661725,0.8734666666666666,0.1280028583460984,0.9777,18.783732915995643,0,3,8

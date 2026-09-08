@@ -33,6 +33,7 @@ DEFAULT_MODELS = [
     "ssb-v4",
     "ssb-v5",
     "ssb-v5.1",
+    "ssb-v6",
     "ssb-v1-block",
     "ssb-v2-block",
     "ssb-v3-block",
@@ -69,6 +70,10 @@ def validate_args(args):
         raise ValueError("all --block-sizes must be >= 1")
     if any(step < 1 for step in args.child_refresh_steps):
         raise ValueError("all --child-refresh-steps must be >= 1")
+    if any(step < 1 for step in args.score_refresh_steps):
+        raise ValueError("all --score-refresh-steps must be >= 1")
+    if not 0 < args.v6_gradient_retention <= 1:
+        raise ValueError("--v6-gradient-retention must be in (0, 1]")
 
 
 def build_jobs(args, datasets):
@@ -92,6 +97,11 @@ def build_jobs(args, datasets):
                         for ratio in args.keep_ratios
                         for refresh_steps in args.child_refresh_steps
                     ]
+                elif model == "ssb-v6":
+                    configurations = [
+                        (1.0, 0, score_steps)
+                        for score_steps in args.score_refresh_steps
+                    ]
                 else:
                     configurations = [(ratio, 0, 0) for ratio in args.keep_ratios]
 
@@ -113,6 +123,9 @@ def build_jobs(args, datasets):
                             )
                         elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
+                        elif model == "ssb-v6":
+                            retention = str(args.v6_gradient_retention).replace('.', '_')
+                            leaf = f"gradient_retention_{retention}/score_refresh_{refresh_steps}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
 
@@ -141,7 +154,7 @@ def print_plan(jobs, args):
             counts["block_ssb"] += 1
         elif model in {"dropout", "pruning"}:
             counts["baselines"] += 1
-        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
+        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6"}:
             counts["structured_child"] += 1
         else:
             counts["neuron_ssb"] += 1
@@ -153,7 +166,7 @@ def print_plan(jobs, args):
     print(f"  dense runs:     {counts['dense']}")
     print(f"  baseline runs:  {counts['baselines']}")
     print(f"  neuron SSB:     {counts['neuron_ssb']}")
-    print(f"  structured V4/5/5.1:{counts['structured_child']}")
+    print(f"  structured V4/5/5.1/6: {counts['structured_child']}")
     print(f"  block SSB:      {counts['block_ssb']}")
     print(f"Planned experiments: {len(jobs)}")
 
@@ -183,6 +196,8 @@ def main():
         "--block-sizes", nargs="+", type=int, default=DEFAULT_BLOCK_SIZES
     )
     parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[1, 10, 25, 100], help="For V4/V5 only: resample the structured child exactly every N optimizer steps.")
+    parser.add_argument("--score-refresh-steps", nargs="+", type=int, default=[10, 25, 100], help="For V6 only: dense-score and rebuild the gradient-ranked child every N optimizer steps.")
+    parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="Dynamic V6 retains this fraction of per-layer squared gradient energy.")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--stop-at-convergence", action="store_true", help="Use validation-loss early stopping instead of a fixed epoch count.")
@@ -251,6 +266,12 @@ def main():
             command.extend(["--block-size", str(block_size)])
         if model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
             command.extend(["--child-refresh-steps", str(refresh_steps)])
+        if model == "ssb-v6":
+            command.extend([
+                "--score-refresh-steps", str(refresh_steps),
+                "--v6-selection-mode", "gradient_retention",
+                "--v6-gradient-retention", str(args.v6_gradient_retention),
+            ])
 
         print()
         print(f"[{index}/{len(jobs)}] {' '.join(command)}")

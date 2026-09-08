@@ -1,0 +1,13 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,score_refresh_steps,v6_selection_mode,v6_gradient_retention,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,1,0.5636414563814799,0.8336166666666667,0.19048339969217779,0.9454,52.22546612500446,1,1,0
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,2,0.22857048247655232,0.9342833333333334,0.11308574290648103,0.9675,38.225482875001035,1,2,0
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,3,0.21282834215164184,0.9396333333333333,0.10076317115565762,0.9703,30.773203500000818,1,3,0
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,4,0.2440871128499508,0.9284333333333333,0.0930718021743407,0.9745,24.536540749999403,1,4,0
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,5,0.29239154564539593,0.9094666666666666,0.09546413298204134,0.9759,23.366381500003627,0,4,1
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,6,0.29698780573209127,0.9105166666666666,0.11087710270775133,0.9755,20.9027734170013,0,4,2
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,7,0.3281360484520594,0.8984166666666666,0.11577720212908162,0.9758,21.888383582998358,0,4,3
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,8,0.35505816489855446,0.8914833333333333,0.13191286082364223,0.9765,20.955816417001188,0,4,4
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,9,0.37072694781621296,0.8854333333333333,0.13266603280629785,0.9767,20.104558833998453,0,4,5
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,10,0.389932017771403,0.8779166666666667,0.12529531976773306,0.9767,20.37642408299871,0,4,6
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,11,0.40225292027791343,0.8757333333333334,0.1309930927769685,0.9782,18.998581708998245,0,4,7
+e8b24fb6c06dff29,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,1,gradient_retention,0.9,1,12,0.40571907891829806,0.8734,0.13123977934954456,0.9784,19.609033708002244,0,4,8

@@ -1,0 +1,16 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,score_refresh_steps,v6_selection_mode,v6_gradient_retention,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,1,0.36313210095564524,0.8932666666666667,0.16672437015566974,0.9584,15.399451916993712,1,1,0
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,2,0.15997619778315225,0.9533,0.1396432655732322,0.9667,12.96771562500362,1,2,0
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,3,0.12039886020421982,0.9638666666666666,0.12180725927135207,0.9724,11.803020083003503,1,3,0
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,4,0.11982284290393194,0.9651166666666666,0.17120300435357094,0.972,11.002072833005514,0,3,1
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,5,0.11996588606884082,0.9669666666666666,0.11543843602661218,0.9764,10.660227084001235,1,5,0
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,6,0.12639090901613234,0.9634166666666667,0.1476916103087031,0.9741,10.377720125004998,0,5,1
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,7,0.1097503616248568,0.9679833333333333,0.0948172879421574,0.9804,10.145763708998857,1,7,0
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,8,0.12987827836473784,0.9633166666666667,0.16448863609607797,0.9746,9.692292833002284,0,7,1
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,9,0.12818446716864904,0.9636166666666667,0.10435386264089566,0.9781,9.537145499998587,0,7,2
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,10,0.11311067480780185,0.96655,0.1277296332290658,0.9778,9.557540082998457,0,7,3
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,11,0.11819060474832853,0.9656666666666667,0.12199260542976235,0.9808,9.4771941670042,0,7,4
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,12,0.13661066981156667,0.9600333333333333,0.1535349886790882,0.9781,9.382716750005784,0,7,5
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,13,0.13342304619848727,0.96175,0.09752249643276846,0.982,9.390367583000625,0,7,6
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,14,0.10602414982120197,0.9687666666666667,0.10851109741313658,0.9813,9.195717458002036,0,7,7
+107e40f64de75dfb,mnist,ssb-v6,cnn,protocol-v6-dynamic-convergence-v1,1.0,0,0,25,gradient_retention,0.9,3,15,0.11924584817936024,0.9650166666666666,0.12221690582265746,0.9807,9.13206929199805,0,7,8

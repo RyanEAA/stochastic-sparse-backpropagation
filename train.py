@@ -54,6 +54,18 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
     global_step = global_step_start
     for batch_index, (x, y) in enumerate(loader):
         x, y = x.to(device), y.to(device)
+        refresh_count_before = int(getattr(model, "refresh_count", 0))
+        topology_before = model.topology_signature() if hasattr(model, "topology_signature") else ""
+        scoring_event = False
+        dense_scoring_time_s = 0.0
+        child_rebuild_time_s = 0.0
+        if getattr(model, "is_v6_gradient_selected", False):
+            optimizer, scoring_event = model.score_and_refresh(
+                x, y, criterion, optimizer, learning_rate
+            )
+            if scoring_event:
+                dense_scoring_time_s = model.last_dense_scoring_time_s
+                child_rebuild_time_s = model.last_child_rebuild_time_s
         optimizer.zero_grad(set_to_none=True)
         synchronize(device)
         forward_start = time.perf_counter()
@@ -71,8 +83,6 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         memory = memory_bytes(device)
         optimizer.step()
         global_step += 1
-        refresh_count_before = int(getattr(model, "refresh_count", 0))
-        topology_before = model.topology_signature() if hasattr(model, "topology_signature") else ""
         if getattr(model, "is_v5_structured_child", False):
             optimizer = model.after_optimizer_step(optimizer, learning_rate)
         elif hasattr(model, "after_optimizer_step") and model.after_optimizer_step():
@@ -83,6 +93,11 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         refresh_count_after = int(getattr(model, "refresh_count", 0))
         topology_after = model.topology_signature() if hasattr(model, "topology_signature") else ""
         child_refreshed = refresh_count_after > refresh_count_before
+        importance_min, importance_mean, importance_max = (
+            model.importance_statistics()
+            if getattr(model, "is_v6_gradient_selected", False)
+            else (0.0, 0.0, 0.0)
+        )
 
         n = y.size(0)
         loss_sum += loss.item() * n
@@ -102,6 +117,16 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 child_refresh_count=refresh_count_after,
                 child_topology_before=topology_before,
                 child_topology_after=topology_after,
+                gradient_scoring_event=int(scoring_event),
+                gradient_scoring_event_count=int(getattr(model, "scoring_event_count", 0)),
+                dense_scoring_time_s=dense_scoring_time_s,
+                child_rebuild_time_s=child_rebuild_time_s,
+                active_structured_units=(model.active_structured_units() if getattr(model, "is_v6_gradient_selected", False) else 0),
+                total_structured_units=(model.total_structured_units() if getattr(model, "is_v6_gradient_selected", False) else 0),
+                effective_keep_ratio=(model.effective_keep_ratio() if getattr(model, "is_v6_gradient_selected", False) else 1.0),
+                importance_min=importance_min,
+                importance_mean=importance_mean,
+                importance_max=importance_max,
             )
         )
     synchronize(device)
@@ -137,6 +162,9 @@ def main():
     parser.add_argument("--keep-ratio", type=float, default=1.0)
     parser.add_argument("--block-size", type=int, default=32)
     parser.add_argument("--child-refresh-steps", type=int, default=100)
+    parser.add_argument("--score-refresh-steps", type=int, default=100, help="For V6: run dense gradient scoring and rebuild the top-k child every N optimizer steps.")
+    parser.add_argument("--v6-selection-mode", choices=["fixed", "gradient_retention"], default="fixed")
+    parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="For dynamic V6: smallest child retaining this fraction of per-layer squared gradient energy.")
     parser.add_argument("--epochs", type=int, default=3, help="Fixed epoch count when --stop-at-convergence is not used.")
     parser.add_argument("--stop-at-convergence", action="store_true", help="Stop when validation loss has not improved by --min-delta for --patience epochs.")
     parser.add_argument("--max-epochs", type=int, default=100, help="Safety cap when --stop-at-convergence is enabled.")
@@ -161,6 +189,10 @@ def main():
         raise ValueError("block_size must be positive for block SSB variants.")
     if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} and args.child_refresh_steps <= 0:
         raise ValueError("child_refresh_steps must be positive for structured-child variants.")
+    if args.model == "ssb-v6" and args.score_refresh_steps <= 0:
+        raise ValueError("score_refresh_steps must be positive for SSB-V6.")
+    if args.model == "ssb-v6" and not 0 < args.v6_gradient_retention <= 1:
+        raise ValueError("v6_gradient_retention must be in (0, 1].")
     if args.stop_at_convergence and args.max_epochs < 1:
         raise ValueError("max_epochs must be >= 1.")
     if args.stop_at_convergence and args.patience < 1:
@@ -180,6 +212,9 @@ def main():
         architecture=args.architecture,
         block_size=args.block_size,
         child_refresh_steps=args.child_refresh_steps,
+        score_refresh_steps=args.score_refresh_steps,
+        v6_selection_mode=args.v6_selection_mode,
+        v6_gradient_retention=args.v6_gradient_retention,
     )
     initialize_model_parameters(model, args.seed)
     model = model.to(device)
@@ -202,6 +237,9 @@ def main():
         "keep_ratio": 1.0 if args.model == "dense" else args.keep_ratio,
         "block_size": args.block_size if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} else 0,
         "child_refresh_steps": args.child_refresh_steps if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} else 0,
+        "score_refresh_steps": args.score_refresh_steps if args.model == "ssb-v6" else 0,
+        "v6_selection_mode": args.v6_selection_mode if args.model == "ssb-v6" else None,
+        "v6_gradient_retention": args.v6_gradient_retention if args.model == "ssb-v6" and args.v6_selection_mode == "gradient_retention" else None,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
@@ -233,20 +271,21 @@ def main():
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "memory_metric": "cuda_peak_allocated_after_backward" if device.type == "cuda" else "process_rss_after_backward",
         "cnn_scope": (
-            "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5"}
+            "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5", "ssb-v6"}
             else "dense_forward_structured_backward_conv_and_classifier" if args.architecture == "cnn" and args.model == "ssb-v5.1"
             else "dense_conv_backbone_ssb_linear_classifier" if args.architecture == "cnn" and args.model.startswith("ssb-")
             else None
         ),
         "structured_child_optimizer_state_policy": (
             "adam_state_resets_when_child_is_resampled" if args.model == "ssb-v4"
-            else "master_owned_persistent_adam_moments" if args.model in {"ssb-v5", "ssb-v5.1"}
+            else "master_owned_persistent_adam_moments" if args.model in {"ssb-v5", "ssb-v5.1", "ssb-v6"}
             else None
         ),
         "structured_child_master_parameters": model.master_parameter_count() if hasattr(model, "master_parameter_count") else None,
         "structured_child_initial_child_parameters": model.child_parameter_count() if hasattr(model, "child_parameter_count") else None,
         "forward_backward_policy": (
             "dense_forward_structured_sparse_backward" if args.model == "ssb-v5.1"
+            else "structured_child_forward_and_backward_with_periodic_dense_gradient_scoring" if args.model == "ssb-v6"
             else "structured_child_forward_and_backward" if args.model in {"ssb-v4", "ssb-v5"}
             else "dense_standard" if args.model == "dense" else None
         ),
@@ -258,6 +297,7 @@ def main():
         f"dataset={dataset} model={args.model} architecture={args.architecture} "
         f"keep_ratio={identity['keep_ratio']} block_size={identity['block_size']} "
         f"child_refresh_steps={identity['child_refresh_steps']} "
+        f"score_refresh_steps={identity['score_refresh_steps']} "
         f"seed={args.seed} device={device} run_id={run_id}"
     )
 
@@ -272,6 +312,9 @@ def main():
         "keep_ratio": identity["keep_ratio"],
         "block_size": identity["block_size"],
         "child_refresh_steps": identity["child_refresh_steps"],
+        "score_refresh_steps": identity["score_refresh_steps"],
+        "v6_selection_mode": identity["v6_selection_mode"],
+        "v6_gradient_retention": identity["v6_gradient_retention"],
         "seed": args.seed,
     }
     global_step = 0
@@ -334,6 +377,10 @@ def main():
         "stop_reason": stop_reason,
         "total_training_wall_time_s": total_training_wall_time_s,
         "converged_by_patience": stop_reason == "validation_loss_patience",
+        "gradient_scoring_events": int(getattr(model, "scoring_event_count", 0)),
+        "dense_scoring_time_s": float(getattr(model, "dense_scoring_time_s", 0.0)),
+        "child_rebuild_time_s": float(getattr(model, "child_rebuild_time_s", 0.0)),
+        "final_effective_keep_ratio": float(model.effective_keep_ratio()) if getattr(model, "is_v6_gradient_selected", False) else None,
     })
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
 
@@ -346,6 +393,9 @@ def main():
         "keep_ratio",
         "block_size",
         "child_refresh_steps",
+        "score_refresh_steps",
+        "v6_selection_mode",
+        "v6_gradient_retention",
         "seed",
     ]
     write_csv(
@@ -357,7 +407,7 @@ def main():
     write_csv(
         args.output_dir / "batches.csv",
         batch_rows,
-        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after"],
+        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max"],
     )
 
 

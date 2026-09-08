@@ -15,6 +15,40 @@ The project is intentionally organized so that **algorithm mechanics, architectu
 | `ssb-v1-block` | Dense | Contiguous neuron blocks | None |
 | `ssb-v2-block` | Dense | Contiguous neuron blocks | `1 / keep_ratio` |
 | `ssb-v3-block` | Active blocks only during training | Same selected contiguous blocks | None |
+| `ssb-v4` | Physically smaller random child | Same child | Child Adam resets on refresh |
+| `ssb-v5` | Physically smaller random child | Same child | Master-owned persistent Adam state |
+| `ssb-v5.1` | Full dense master | Physically smaller random surrogate child | Master-owned persistent Adam state |
+| `ssb-v6` | Physically smaller gradient-ranked child | Same child; periodic dense scoring backward | Master-owned persistent Adam state |
+
+### V6 Stage 2
+
+V6 isolates whether gradient-informed structured selection is better than V5's
+random selection at the same fixed child size. Every `score_refresh_steps`, it
+synchronizes the child into the dense master, performs a dense forward/backward
+without a dense optimizer update, scores each hidden Linear output neuron or Conv2d
+output channel by the L2 norm of its weight gradient, and rebuilds the V5-style
+child from the exact top-k units.
+
+```bash
+python train.py \
+  --dataset mnist \
+  --model ssb-v6 \
+  --architecture cnn \
+  --keep-ratio 0.5 \
+  --score-refresh-steps 25 \
+  --epochs 3 \
+  --output-dir results/v6-smoke
+```
+
+The batch CSV records each scoring event, dense-scoring time, child-rebuild time,
+active structured units, and score statistics. Total epoch/training wall time
+includes scoring and rebuild overhead.
+
+Dynamic V6 uses `--v6-selection-mode gradient_retention` and chooses a separate
+child size per hidden layer. The smallest top-ranked set retaining the requested
+fraction of squared gradient energy is kept. See `CONVERGENCE_EXPERIMENT.md` for
+the controlled dense-versus-dynamic-V6 experiment, where only
+`--score-refresh-steps` is swept.
 
 The naming convention deliberately separates the **SSB rule/version** from its **sparsity structure**. For example, `ssb-v1` and `ssb-v1-block` use the same V1 gradient rule but different selection structures. The family now has neuron-level and block-structured counterparts for V1, V2, and V3, keeping algorithm rule and sparsity structure as separate dimensions.
 

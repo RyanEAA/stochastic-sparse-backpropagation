@@ -15,6 +15,7 @@ AVAILABLE_MODELS = (
     "ssb-v4",
     "ssb-v5",
     "ssb-v5.1",
+    "ssb-v6",
     "ssb-v1-block",
     "ssb-v2-block",
     "ssb-v3-block",
@@ -29,6 +30,9 @@ def build_model(
     architecture: str = "mlp",
     block_size: int = 32,
     child_refresh_steps: int = 100,
+    score_refresh_steps: int = 100,
+    v6_selection_mode: str = "fixed",
+    v6_gradient_retention: float = 0.90,
 ):
     dataset = dataset.lower().replace('-', '_')
     model = model.lower()
@@ -51,9 +55,16 @@ def build_model(
         return importlib.import_module(f"models.{dataset}.pruning.model").build(
             keep_ratio=keep_ratio, **kwargs
         )
-    if model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
+    if model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6"}:
         config = importlib.import_module(f"models.{dataset}.config")
-        from models.common.builders import build_structured_child, build_structured_child_v5, build_structured_backward_v51
+        from models.common.builders import build_structured_child, build_structured_child_v5, build_structured_backward_v51, build_gradient_selected_v6
+        if model == "ssb-v6":
+            return build_gradient_selected_v6(
+                config, keep_ratio=keep_ratio, architecture=architecture,
+                score_refresh_steps=score_refresh_steps,
+                selection_mode=v6_selection_mode,
+                gradient_retention=v6_gradient_retention,
+            )
         builder = build_structured_backward_v51 if model == "ssb-v5.1" else (build_structured_child_v5 if model == "ssb-v5" else build_structured_child)
         return builder(
             config, keep_ratio=keep_ratio, architecture=architecture,

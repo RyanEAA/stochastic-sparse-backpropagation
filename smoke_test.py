@@ -123,7 +123,7 @@ def one_step(dataset, architecture, model_name, num_classes):
 
 
 
-def test_v4_structured_child(dataset, architecture, num_classes):
+def check_v4_structured_child(dataset, architecture, num_classes):
     shape = (4, 1, 28, 28) if dataset in {"mnist", "fashion_mnist", "kmnist"} else (4, 3, 32, 32)
     x = torch.randn(*shape)
     y = torch.randint(0, num_classes, (shape[0],))
@@ -152,7 +152,7 @@ def test_v4_structured_child(dataset, architecture, num_classes):
     )
 
 
-def test_v5_master_optimizer_state(dataset, architecture, num_classes):
+def check_v5_master_optimizer_state(dataset, architecture, num_classes):
     shape = (4, 1, 28, 28) if dataset in {"mnist", "fashion_mnist", "kmnist"} else (4, 3, 32, 32)
     x = torch.randn(*shape)
     y = torch.randint(0, num_classes, (shape[0],))
@@ -212,8 +212,8 @@ def main():
         one_step("cifar10", architecture, "ssb-v1-block", 10)
         one_step("cifar10", architecture, "ssb-v2-block", 10)
         one_step("cifar10", architecture, "ssb-v3-block", 10)
-        test_v4_structured_child("cifar10", architecture, 10)
-        test_v5_master_optimizer_state("cifar10", architecture, 10)
+        check_v4_structured_child("cifar10", architecture, 10)
+        check_v5_master_optimizer_state("cifar10", architecture, 10)
 
     print("PASS registry, V0/V1/V2 compatibility, V3/V3-block semantics, V4/V5 structured-child mechanics, V5 persistent Adam state, block structure, CNN/MLP wiring, and initialization parity")
 
