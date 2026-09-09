@@ -18,31 +18,49 @@ The project is intentionally organized so that **algorithm mechanics, architectu
 | `ssb-v4` | Physically smaller random child | Same child | Child Adam resets on refresh |
 | `ssb-v5` | Physically smaller random child | Same child | Master-owned persistent Adam state |
 | `ssb-v5.1` | Full dense master | Physically smaller random surrogate child | Master-owned persistent Adam state |
-| `ssb-v6` | Physically smaller gradient-ranked child | Same child; periodic dense scoring backward | Master-owned persistent Adam state |
+| `ssb-v6` | Physically smaller ranked child | Same child; periodic selector refresh | Master-owned persistent Adam state |
+| `ssb-v7` | Optimized V6 ranked child | Same child; periodic selector refresh | Adam state synchronized only at refresh |
+
+### V7 optimized implementation
+
+V7 preserves V6 selection and Early-Bird behavior while removing redundant
+per-batch master optimizer-state scattering. It also skips topology hashing and
+importance statistics on batches without a scoring event. Use
+`--timing-detail full` only for short profiling runs because synchronized phase
+timers add overhead. Normal experiments default to low-overhead timing and defer
+training loss/accuracy conversion to the end of each epoch.
+
+See `V7_EXPERIMENT.md` for diagnostic and multi-dataset commands.
 
 ### V6 Stage 2
 
-V6 isolates whether gradient-informed structured selection is better than V5's
-random selection at the same fixed child size. Every `score_refresh_steps`, it
-synchronizes the child into the dense master, performs a dense forward/backward
-without a dense optimizer update, scores each hidden Linear output neuron or Conv2d
-output channel by the L2 norm of its weight gradient, and rebuilds the V5-style
-child from the exact top-k units.
+V6 selects hidden Linear neurons and Conv2d output channels for a physical child.
+Available selectors are gradient L2, weight L2, and first-order Taylor
+`sum(abs(weight * gradient))`. Weight L2 avoids the dense scoring pass entirely;
+the gradient and Taylor selectors perform a dense scoring backward without a
+dense optimizer update. Optional Early-Bird detection stops topology refreshes
+after a configured window of selected-unit mask distances remains stable.
 
 ```bash
 python train.py \
   --dataset mnist \
   --model ssb-v6 \
   --architecture cnn \
-  --keep-ratio 0.5 \
+  --keep-ratio 0.2 \
   --score-refresh-steps 25 \
+  --v6-selection-method taylor \
+  --v6-early-bird \
+  --v6-stability-window 5 \
+  --v6-stability-threshold 0.10 \
   --epochs 3 \
   --output-dir results/v6-smoke
 ```
 
-The batch CSV records each scoring event, dense-scoring time, child-rebuild time,
-active structured units, and score statistics. Total epoch/training wall time
-includes scoring and rebuild overhead.
+The batch CSV records selector and dense-scoring time separately, mask distance,
+the Early-Bird freeze step, child-rebuild time, active units, and score statistics.
+Total epoch/training wall time includes all selector and rebuild overhead.
+
+See `V6_SELECTOR_EXPERIMENT.md` for the fixed-20% selector comparison.
 
 Dynamic V6 uses `--v6-selection-mode gradient_retention` and chooses a separate
 child size per hidden layer. The smallest top-ranked set retaining the requested

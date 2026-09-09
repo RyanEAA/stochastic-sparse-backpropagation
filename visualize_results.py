@@ -24,6 +24,14 @@ def config_label(row):
     if pd.notna(refresh) and int(refresh) > 0:
         parts.append(f"r={int(refresh)}")
 
+    score_refresh = row.get("score_refresh_steps", 0)
+    if pd.notna(score_refresh) and int(score_refresh) > 0:
+        parts.append(f"r={int(score_refresh)}")
+
+    selector = row.get("v6_selection_method", None)
+    if pd.notna(selector) and str(selector) not in {"", "none"}:
+        parts.append(str(selector).replace("_", "-"))
+
     return "\n".join(parts)
 
 
@@ -31,7 +39,7 @@ def bar_metric(df, mean, std, ylabel, title, path):
     plot_df = df.copy()
     plot_df["config_label"] = plot_df.apply(config_label, axis=1)
     plot_df = plot_df.sort_values(
-        ["model", "keep_ratio", "block_size", "child_refresh_steps"],
+        ["model", "keep_ratio", "block_size", "child_refresh_steps", "score_refresh_steps", "v6_selection_method"],
         na_position="last",
     )
 
@@ -65,6 +73,8 @@ def main():
         "protocol_version": "historical",
         "block_size": 0,
         "child_refresh_steps": 0,
+        "score_refresh_steps": 0,
+        "v6_selection_method": "none",
     }
     for column, default in defaults.items():
         if column not in df.columns:
@@ -141,6 +151,22 @@ def main():
                 f"{prefix}: backward time by configuration",
                 directory / "backward_time_bars.png",
             )
+
+        for column, label in (
+            ("optimizer_step", "Optimizer step"),
+            ("post_step", "Post-step synchronization"),
+            ("instrumentation", "Instrumentation"),
+            ("selection_refresh", "Selection/refresh"),
+            ("batch_wall", "Total batch wall-clock"),
+            ("unaccounted", "Unaccounted batch time"),
+        ):
+            mean, std = f"{column}_ms_mean", f"{column}_ms_std"
+            if mean in group.columns:
+                bar_metric(
+                    group, mean, std, f"{label} time (ms)",
+                    f"{prefix}: {label.lower()} time by configuration",
+                    directory / f"{column}_time_bars.png",
+                )
 
     print(f"Bar plots saved under {output}")
 

@@ -34,6 +34,7 @@ DEFAULT_MODELS = [
     "ssb-v5",
     "ssb-v5.1",
     "ssb-v6",
+    "ssb-v7",
     "ssb-v1-block",
     "ssb-v2-block",
     "ssb-v3-block",
@@ -103,7 +104,7 @@ def build_jobs(args, datasets):
                         for ratio in args.keep_ratios
                         for refresh_steps in args.child_refresh_steps
                     ]
-                elif model == "ssb-v6":
+                elif model in {"ssb-v6", "ssb-v7"}:
                     configurations = [
                         (args.v6_keep_ratio, 0, score_steps, selector)
                         for score_steps in args.score_refresh_steps
@@ -130,7 +131,7 @@ def build_jobs(args, datasets):
                             )
                         elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
-                        elif model == "ssb-v6":
+                        elif model in {"ssb-v6", "ssb-v7"}:
                             leaf = f"selector_{selector}/{keep_dir(ratio)}/score_refresh_{refresh_steps}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
@@ -161,7 +162,7 @@ def print_plan(jobs, args):
             counts["block_ssb"] += 1
         elif model in {"dropout", "pruning"}:
             counts["baselines"] += 1
-        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6"}:
+        elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6", "ssb-v7"}:
             counts["structured_child"] += 1
         else:
             counts["neuron_ssb"] += 1
@@ -173,7 +174,7 @@ def print_plan(jobs, args):
     print(f"  dense runs:     {counts['dense']}")
     print(f"  baseline runs:  {counts['baselines']}")
     print(f"  neuron SSB:     {counts['neuron_ssb']}")
-    print(f"  structured V4/5/5.1/6: {counts['structured_child']}")
+    print(f"  structured V4/5/5.1/6/7: {counts['structured_child']}")
     print(f"  block SSB:      {counts['block_ssb']}")
     print(f"Planned experiments: {len(jobs)}")
 
@@ -210,6 +211,8 @@ def main():
     parser.add_argument("--v6-disable-early-bird", action="store_true", help="Keep refreshing V6 masks for the whole run.")
     parser.add_argument("--v6-stability-window", type=int, default=5)
     parser.add_argument("--v6-stability-threshold", type=float, default=0.10)
+    parser.add_argument("--timing-detail", choices=["basic", "full"], default="basic")
+    parser.add_argument("--record-batch-metrics", action="store_true")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--stop-at-convergence", action="store_true", help="Use validation-loss early stopping instead of a fixed epoch count.")
@@ -265,11 +268,14 @@ def main():
             "--num-workers", str(args.num_workers),
             "--protocol-version", args.protocol_version,
             "--experiment-tag", args.experiment_tag,
+            "--timing-detail", args.timing_detail,
             "--output-dir", str(output_dir),
         ]
 
         if args.stop_at_convergence:
             command.append("--stop-at-convergence")
+        if args.record_batch_metrics:
+            command.append("--record-batch-metrics")
 
         # Pass only parameters that are meaningful for this model family.
         if model != "dense":
@@ -278,7 +284,7 @@ def main():
             command.extend(["--block-size", str(block_size)])
         if model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
             command.extend(["--child-refresh-steps", str(refresh_steps)])
-        if model == "ssb-v6":
+        if model in {"ssb-v6", "ssb-v7"}:
             command.extend([
                 "--score-refresh-steps", str(refresh_steps),
                 "--v6-selection-mode", "fixed",

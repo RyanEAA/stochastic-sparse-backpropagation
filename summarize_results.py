@@ -18,6 +18,8 @@ def add_compatibility_columns(frame):
         "v6_stability_window": 0,
         "v6_stability_threshold": float("nan"),
         "run_id": "",
+        "timing_detail": "historical",
+        "record_batch_metrics": True,
     }
     for column, default in defaults.items():
         if column not in frame.columns:
@@ -64,6 +66,8 @@ def main():
         "v6_early_bird",
         "v6_stability_window",
         "v6_stability_threshold",
+        "timing_detail",
+        "record_batch_metrics",
         "seed",
     ]
     experiment_keys = run_keys[:-1]
@@ -84,6 +88,17 @@ def main():
         "mean_backward_ms": ("backward_time_s", lambda values: values.mean() * 1000.0),
         "mean_memory_mb": ("memory_bytes", lambda values: values.mean() / (1024 ** 2)),
     }
+    timing_columns = [
+        "data_transfer_time_s", "selection_refresh_time_s", "zero_grad_time_s",
+        "loss_time_s", "memory_measurement_time_s", "optimizer_step_time_s",
+        "post_step_time_s", "instrumentation_time_s", "batch_wall_time_s",
+        "unaccounted_time_s",
+    ]
+    for column in timing_columns:
+        if column in batches.columns:
+            batch_aggs[f"mean_{column.removesuffix('_time_s')}_ms"] = (
+                column, lambda values: values.mean() * 1000.0
+            )
     if "child_refreshed" in batches.columns:
         batch_aggs["child_refresh_events"] = ("child_refreshed", "sum")
     if "gradient_scoring_event" in batches.columns:
@@ -124,6 +139,13 @@ def main():
         epochs_completed_std=("epochs_completed", "std"),
         total_training_time_mean=("total_training_time_s", "mean"),
         total_training_time_std=("total_training_time_s", "std"),
+        **{
+            output_name: (per_run_name, statistic)
+            for column in timing_columns
+            if (per_run_name := f"mean_{column.removesuffix('_time_s')}_ms") in per_run.columns
+            for statistic, suffix in (("mean", "mean"), ("std", "std"))
+            for output_name in (f"{column.removesuffix('_time_s')}_ms_{suffix}",)
+        },
         **({
             "child_refresh_events_mean": ("child_refresh_events", "mean"),
             "child_refresh_events_std": ("child_refresh_events", "std"),

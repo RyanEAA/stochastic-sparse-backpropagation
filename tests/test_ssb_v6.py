@@ -2,6 +2,7 @@ import torch
 from torch import nn
 
 from algorithms.ssb.v6 import GradientSelectedChildModelV6
+from algorithms.ssb.v7 import OptimizedSelectedChildModelV7
 from algorithms.ssb.v6.gradient_selected_child import (
     gradient_retention_indices,
     selected_unit_mask_distance,
@@ -205,3 +206,17 @@ def test_v6_cnn_scores_and_trains_physically_smaller_child():
     assert model.child_parameter_count() < model.master_parameter_count()
     assert any(mapping.kind == "conv" for mapping in model._maps)
     assert any(mapping.kind == "linear" for mapping in model._maps)
+
+
+def test_v7_does_not_scatter_master_adam_state_on_ordinary_steps():
+    model = OptimizedSelectedChildModelV7(
+        DenseMLP(4, [6], 3), keep_ratio=0.5, score_refresh_steps=10
+    )
+    model.refresh_child()
+    optimizer = model.make_optimizer(1e-3)
+    calls = []
+    model.sync_optimizer_state_to_master = lambda _optimizer: calls.append(True)
+    model.after_optimizer_step(optimizer, 1e-3)
+    model.after_optimizer_step(optimizer, 1e-3)
+    assert calls == []
+    assert model.optimizer_step_count == 2

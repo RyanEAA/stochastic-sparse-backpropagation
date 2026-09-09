@@ -46,45 +46,93 @@ def make_run_id(config):
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
 
 
-def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate, global_step_start=0):
+def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate, global_step_start=0, detailed_timing=False, record_batch_metrics=False):
     model.train()
     loss_sum = correct = total = 0
     batches = []
     start = time.perf_counter()
     global_step = global_step_start
+    # MPS does not support float64. Training losses are float32, so accumulating
+    # them in float32 keeps this path portable across MPS, CUDA, and CPU.
+    loss_accumulator = torch.zeros((), device=device, dtype=torch.float32)
+    correct_accumulator = torch.zeros((), device=device, dtype=torch.long)
     for batch_index, (x, y) in enumerate(loader):
+        batch_wall_start = time.perf_counter()
+        if detailed_timing:
+            synchronize(device)
+        transfer_start = time.perf_counter()
         x, y = x.to(device), y.to(device)
+        if detailed_timing:
+            synchronize(device)
+        data_transfer_time_s = time.perf_counter() - transfer_start if detailed_timing else 0.0
+        optimized_instrumentation = bool(getattr(model, "is_v7_optimized", False))
         refresh_count_before = int(getattr(model, "refresh_count", 0))
-        topology_before = model.topology_signature() if hasattr(model, "topology_signature") else ""
+        scoring_due = bool(
+            getattr(model, "is_v6_gradient_selected", False) and model.scoring_due()
+        )
+        topology_before = (
+            model.topology_signature()
+            if hasattr(model, "topology_signature") and (not optimized_instrumentation or scoring_due)
+            else ""
+        )
         scoring_event = False
+        selection_refresh_time_s = 0.0
         selector_scoring_time_s = 0.0
         dense_scoring_time_s = 0.0
         child_rebuild_time_s = 0.0
         if getattr(model, "is_v6_gradient_selected", False):
+            if detailed_timing:
+                synchronize(device)
+            selection_start = time.perf_counter()
             optimizer, scoring_event = model.score_and_refresh(
                 x, y, criterion, optimizer, learning_rate
             )
+            if detailed_timing:
+                synchronize(device)
+            selection_refresh_time_s = time.perf_counter() - selection_start if detailed_timing else 0.0
             if scoring_event:
                 selector_scoring_time_s = model.last_selector_scoring_time_s
                 dense_scoring_time_s = model.last_dense_scoring_time_s
                 child_rebuild_time_s = model.last_child_rebuild_time_s
+        if detailed_timing:
+            synchronize(device)
+        zero_grad_start = time.perf_counter()
         optimizer.zero_grad(set_to_none=True)
+        if detailed_timing:
+            synchronize(device)
+        zero_grad_time_s = time.perf_counter() - zero_grad_start if detailed_timing else 0.0
         synchronize(device)
         forward_start = time.perf_counter()
         output = model(x)
         synchronize(device)
         forward_time = time.perf_counter() - forward_start
+        loss_start = time.perf_counter()
         loss = criterion(output, y)
+        if detailed_timing:
+            synchronize(device)
+        loss_time_s = time.perf_counter() - loss_start if detailed_timing else 0.0
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
-        synchronize(device)
+        if detailed_timing:
+            synchronize(device)
         backward_start = time.perf_counter()
         loss.backward()
         synchronize(device)
         backward_time = time.perf_counter() - backward_start
+        memory_start = time.perf_counter()
         memory = memory_bytes(device)
+        memory_measurement_time_s = time.perf_counter() - memory_start if detailed_timing else 0.0
+        if detailed_timing:
+            synchronize(device)
+        optimizer_start = time.perf_counter()
         optimizer.step()
+        if detailed_timing:
+            synchronize(device)
+        optimizer_step_time_s = time.perf_counter() - optimizer_start if detailed_timing else 0.0
         global_step += 1
+        if detailed_timing:
+            synchronize(device)
+        post_step_start = time.perf_counter()
         if getattr(model, "is_v5_structured_child", False):
             optimizer = model.after_optimizer_step(optimizer, learning_rate)
         elif hasattr(model, "after_optimizer_step") and model.after_optimizer_step():
@@ -92,28 +140,56 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
             # Rebuild Adam for the new child. This reset is recorded in metadata and is
             # intentionally part of the V4 baseline.
             optimizer = optim.Adam(model.training_parameters(), lr=learning_rate)
+        if detailed_timing:
+            synchronize(device)
+        post_step_time_s = time.perf_counter() - post_step_start if detailed_timing else 0.0
+
+        instrumentation_start = time.perf_counter()
         refresh_count_after = int(getattr(model, "refresh_count", 0))
-        topology_after = model.topology_signature() if hasattr(model, "topology_signature") else ""
+        topology_after = (
+            model.topology_signature()
+            if hasattr(model, "topology_signature") and (not optimized_instrumentation or scoring_event)
+            else ""
+        )
         child_refreshed = refresh_count_after > refresh_count_before
         importance_min, importance_mean, importance_max = (
             model.importance_statistics()
             if getattr(model, "is_v6_gradient_selected", False)
+            and (not optimized_instrumentation or scoring_event)
             else (0.0, 0.0, 0.0)
         )
 
         n = y.size(0)
-        loss_sum += loss.item() * n
-        batch_correct = (output.argmax(1) == y).sum().item()
-        correct += batch_correct
+        batch_correct_tensor = (output.argmax(1) == y).sum()
+        loss_accumulator += loss.detach().to(torch.float32) * n
+        correct_accumulator += batch_correct_tensor
+        if record_batch_metrics:
+            loss_sum += loss.item() * n
+            batch_correct = batch_correct_tensor.item()
+            correct += batch_correct
+            batch_accuracy = batch_correct / n
+        else:
+            batch_accuracy = float("nan")
         total += n
-        batches.append(
-            dict(
+        if detailed_timing:
+            synchronize(device)
+        instrumentation_time_s = time.perf_counter() - instrumentation_start
+        row = dict(
                 epoch=epoch,
                 batch=batch_index,
                 forward_time_s=forward_time,
                 backward_time_s=backward_time,
+                data_transfer_time_s=data_transfer_time_s,
+                selection_refresh_time_s=selection_refresh_time_s,
+                zero_grad_time_s=zero_grad_time_s,
+                loss_time_s=loss_time_s,
+                memory_measurement_time_s=memory_measurement_time_s,
+                optimizer_step_time_s=optimizer_step_time_s,
+                post_step_time_s=post_step_time_s,
+                instrumentation_time_s=instrumentation_time_s,
+                detailed_timing=int(detailed_timing),
                 memory_bytes=memory,
-                batch_accuracy=batch_correct / n,
+                batch_accuracy=batch_accuracy,
                 global_step=global_step,
                 child_refreshed=int(child_refreshed),
                 child_refresh_count=refresh_count_after,
@@ -135,8 +211,21 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 topology_freeze_step=int(getattr(model, "topology_freeze_step", 0)),
                 topology_freeze_scoring_event=int(getattr(model, "topology_freeze_scoring_event", 0)),
             )
-        )
+        if detailed_timing:
+            synchronize(device)
+        batch_wall_time_s = time.perf_counter() - batch_wall_start if detailed_timing else 0.0
+        accounted = sum((
+            data_transfer_time_s, selection_refresh_time_s, zero_grad_time_s,
+            forward_time, loss_time_s, backward_time, memory_measurement_time_s,
+            optimizer_step_time_s, post_step_time_s, instrumentation_time_s,
+        ))
+        row["batch_wall_time_s"] = batch_wall_time_s
+        row["unaccounted_time_s"] = max(0.0, batch_wall_time_s - accounted)
+        batches.append(row)
     synchronize(device)
+    if not record_batch_metrics:
+        loss_sum = float(loss_accumulator.item())
+        correct = int(correct_accumulator.item())
     return loss_sum / total, correct / total, time.perf_counter() - start, batches, optimizer, global_step
 
 
@@ -176,6 +265,8 @@ def main():
     parser.add_argument("--v6-early-bird", action="store_true", help="Freeze the V6 topology once recent mask distances are stable.")
     parser.add_argument("--v6-stability-window", type=int, default=5, help="Number of consecutive mask distances used by Early-Bird.")
     parser.add_argument("--v6-stability-threshold", type=float, default=0.10, help="Maximum mask replacement fraction considered stable.")
+    parser.add_argument("--timing-detail", choices=["basic", "full"], default="basic", help="Full adds synchronized per-stage profiling; basic minimizes benchmark overhead.")
+    parser.add_argument("--record-batch-metrics", action="store_true", help="Record per-batch accuracy; disabled by default to avoid a device synchronization every batch.")
     parser.add_argument("--epochs", type=int, default=3, help="Fixed epoch count when --stop-at-convergence is not used.")
     parser.add_argument("--stop-at-convergence", action="store_true", help="Stop when validation loss has not improved by --min-delta for --patience epochs.")
     parser.add_argument("--max-epochs", type=int, default=100, help="Safety cap when --stop-at-convergence is enabled.")
@@ -200,9 +291,9 @@ def main():
         raise ValueError("block_size must be positive for block SSB variants.")
     if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} and args.child_refresh_steps <= 0:
         raise ValueError("child_refresh_steps must be positive for structured-child variants.")
-    if args.model == "ssb-v6" and args.score_refresh_steps <= 0:
-        raise ValueError("score_refresh_steps must be positive for SSB-V6.")
-    if args.model == "ssb-v6" and not 0 < args.v6_gradient_retention <= 1:
+    if args.model in {"ssb-v6", "ssb-v7"} and args.score_refresh_steps <= 0:
+        raise ValueError("score_refresh_steps must be positive for SSB-V6/V7.")
+    if args.model in {"ssb-v6", "ssb-v7"} and not 0 < args.v6_gradient_retention <= 1:
         raise ValueError("v6_gradient_retention must be in (0, 1].")
     if args.v6_stability_window < 1:
         raise ValueError("v6_stability_window must be >= 1.")
@@ -256,13 +347,13 @@ def main():
         "keep_ratio": 1.0 if args.model == "dense" else args.keep_ratio,
         "block_size": args.block_size if args.model in {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"} else 0,
         "child_refresh_steps": args.child_refresh_steps if args.model in {"ssb-v4", "ssb-v5", "ssb-v5.1"} else 0,
-        "score_refresh_steps": args.score_refresh_steps if args.model == "ssb-v6" else 0,
-        "v6_selection_mode": args.v6_selection_mode if args.model == "ssb-v6" else None,
-        "v6_gradient_retention": args.v6_gradient_retention if args.model == "ssb-v6" and args.v6_selection_mode == "gradient_retention" else None,
-        "v6_selection_method": args.v6_selection_method if args.model == "ssb-v6" else None,
-        "v6_early_bird": bool(args.v6_early_bird) if args.model == "ssb-v6" else False,
-        "v6_stability_window": args.v6_stability_window if args.model == "ssb-v6" else 0,
-        "v6_stability_threshold": args.v6_stability_threshold if args.model == "ssb-v6" else None,
+        "score_refresh_steps": args.score_refresh_steps if args.model in {"ssb-v6", "ssb-v7"} else 0,
+        "v6_selection_mode": args.v6_selection_mode if args.model in {"ssb-v6", "ssb-v7"} else None,
+        "v6_gradient_retention": args.v6_gradient_retention if args.model in {"ssb-v6", "ssb-v7"} and args.v6_selection_mode == "gradient_retention" else None,
+        "v6_selection_method": args.v6_selection_method if args.model in {"ssb-v6", "ssb-v7"} else None,
+        "v6_early_bird": bool(args.v6_early_bird) if args.model in {"ssb-v6", "ssb-v7"} else False,
+        "v6_stability_window": args.v6_stability_window if args.model in {"ssb-v6", "ssb-v7"} else 0,
+        "v6_stability_threshold": args.v6_stability_threshold if args.model in {"ssb-v6", "ssb-v7"} else None,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
@@ -273,6 +364,8 @@ def main():
         "min_delta": args.min_delta if args.stop_at_convergence else 0.0,
         "learning_rate": args.lr,
         "subset": args.subset,
+        "timing_detail": args.timing_detail,
+        "record_batch_metrics": bool(args.record_batch_metrics),
     }
     run_id = make_run_id(identity)
     metadata = {
@@ -294,21 +387,21 @@ def main():
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "memory_metric": "cuda_peak_allocated_after_backward" if device.type == "cuda" else "process_rss_after_backward",
         "cnn_scope": (
-            "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5", "ssb-v6"}
+            "structured_dense_child_conv_and_classifier" if args.architecture == "cnn" and args.model in {"ssb-v4", "ssb-v5", "ssb-v6", "ssb-v7"}
             else "dense_forward_structured_backward_conv_and_classifier" if args.architecture == "cnn" and args.model == "ssb-v5.1"
             else "dense_conv_backbone_ssb_linear_classifier" if args.architecture == "cnn" and args.model.startswith("ssb-")
             else None
         ),
         "structured_child_optimizer_state_policy": (
             "adam_state_resets_when_child_is_resampled" if args.model == "ssb-v4"
-            else "master_owned_persistent_adam_moments" if args.model in {"ssb-v5", "ssb-v5.1", "ssb-v6"}
+            else "master_owned_persistent_adam_moments" if args.model in {"ssb-v5", "ssb-v5.1", "ssb-v6", "ssb-v7"}
             else None
         ),
         "structured_child_master_parameters": model.master_parameter_count() if hasattr(model, "master_parameter_count") else None,
         "structured_child_initial_child_parameters": model.child_parameter_count() if hasattr(model, "child_parameter_count") else None,
         "forward_backward_policy": (
             "dense_forward_structured_sparse_backward" if args.model == "ssb-v5.1"
-            else "structured_child_forward_and_backward_with_periodic_dense_gradient_scoring" if args.model == "ssb-v6"
+            else "structured_child_forward_and_backward_with_periodic_dense_gradient_scoring" if args.model in {"ssb-v6", "ssb-v7"}
             else "structured_child_forward_and_backward" if args.model in {"ssb-v4", "ssb-v5"}
             else "dense_standard" if args.model == "dense" else None
         ),
@@ -343,6 +436,8 @@ def main():
         "v6_stability_window": identity["v6_stability_window"],
         "v6_stability_threshold": identity["v6_stability_threshold"],
         "seed": args.seed,
+        "timing_detail": args.timing_detail,
+        "record_batch_metrics": bool(args.record_batch_metrics),
     }
     global_step = 0
     best_val_loss = float("inf")
@@ -354,7 +449,9 @@ def main():
 
     for epoch in range(1, epoch_limit + 1):
         train_loss, train_accuracy, epoch_time, batches, optimizer, global_step = train_epoch(
-            model, train_loader, optimizer, criterion, device, epoch, args.lr, global_step
+            model, train_loader, optimizer, criterion, device, epoch, args.lr, global_step,
+            detailed_timing=args.timing_detail == "full",
+            record_batch_metrics=args.record_batch_metrics,
         )
         val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
 
@@ -432,6 +529,8 @@ def main():
         "v6_stability_window",
         "v6_stability_threshold",
         "seed",
+        "timing_detail",
+        "record_batch_metrics",
     ]
     write_csv(
         args.output_dir / "epochs.csv",
@@ -442,7 +541,7 @@ def main():
     write_csv(
         args.output_dir / "batches.csv",
         batch_rows,
-        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "selector_scoring_time_s", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max", "mask_distance", "topology_frozen", "topology_freeze_step", "topology_freeze_scoring_event"],
+        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "detailed_timing", "data_transfer_time_s", "selection_refresh_time_s", "zero_grad_time_s", "loss_time_s", "memory_measurement_time_s", "optimizer_step_time_s", "post_step_time_s", "instrumentation_time_s", "batch_wall_time_s", "unaccounted_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "selector_scoring_time_s", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max", "mask_distance", "topology_frozen", "topology_freeze_step", "topology_freeze_scoring_event"],
     )
 
 

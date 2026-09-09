@@ -16,6 +16,7 @@ AVAILABLE_MODELS = (
     "ssb-v5",
     "ssb-v5.1",
     "ssb-v6",
+    "ssb-v7",
     "ssb-v1-block",
     "ssb-v2-block",
     "ssb-v3-block",
@@ -59,11 +60,12 @@ def build_model(
         return importlib.import_module(f"models.{dataset}.pruning.model").build(
             keep_ratio=keep_ratio, **kwargs
         )
-    if model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6"}:
+    if model in {"ssb-v4", "ssb-v5", "ssb-v5.1", "ssb-v6", "ssb-v7"}:
         config = importlib.import_module(f"models.{dataset}.config")
-        from models.common.builders import build_structured_child, build_structured_child_v5, build_structured_backward_v51, build_gradient_selected_v6
-        if model == "ssb-v6":
-            return build_gradient_selected_v6(
+        from models.common.builders import build_structured_child, build_structured_child_v5, build_structured_backward_v51, build_gradient_selected_v6, build_optimized_selected_v7
+        if model in {"ssb-v6", "ssb-v7"}:
+            builder = build_optimized_selected_v7 if model == "ssb-v7" else build_gradient_selected_v6
+            return builder(
                 config, keep_ratio=keep_ratio, architecture=architecture,
                 score_refresh_steps=score_refresh_steps,
                 selection_mode=v6_selection_mode,
