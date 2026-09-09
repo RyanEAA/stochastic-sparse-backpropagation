@@ -105,10 +105,14 @@ def build_structured_backward_v51(config, keep_ratio, architecture="mlp", refres
 def build_gradient_selected_v6(
     config, keep_ratio, architecture="mlp", score_refresh_steps=100,
     selection_mode="fixed", gradient_retention=0.90,
+    selection_method="gradient_l2", early_bird=False,
+    stability_window=5, stability_threshold=0.10,
 ):
     """Build SSB V6 Stage 2: dense gradient scoring + top-k V5-style child."""
     master = build_dense(config, architecture)
     return GradientSelectedChildModelV6(
         master, keep_ratio=keep_ratio, score_refresh_steps=score_refresh_steps,
         selection_mode=selection_mode, gradient_retention=gradient_retention,
+        selection_method=selection_method, early_bird=early_bird,
+        stability_window=stability_window, stability_threshold=stability_threshold,
     )

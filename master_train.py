@@ -74,6 +74,12 @@ def validate_args(args):
         raise ValueError("all --score-refresh-steps must be >= 1")
     if not 0 < args.v6_gradient_retention <= 1:
         raise ValueError("--v6-gradient-retention must be in (0, 1]")
+    if not 0 < args.v6_keep_ratio <= 1:
+        raise ValueError("--v6-keep-ratio must be in (0, 1]")
+    if args.v6_stability_window < 1:
+        raise ValueError("--v6-stability-window must be >= 1")
+    if not 0 <= args.v6_stability_threshold <= 1:
+        raise ValueError("--v6-stability-threshold must be in [0, 1]")
 
 
 def build_jobs(args, datasets):
@@ -84,28 +90,29 @@ def build_jobs(args, datasets):
             for model in args.models:
                 if model == "dense":
                     # Dense has no keep-ratio/block-size/refresh dimension.
-                    configurations = [(1.0, 0, 0)]
+                    configurations = [(1.0, 0, 0, "none")]
                 elif model in BLOCK_MODELS:
                     configurations = [
-                        (ratio, block_size, 0)
+                        (ratio, block_size, 0, "none")
                         for ratio in args.keep_ratios
                         for block_size in args.block_sizes
                     ]
                 elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                     configurations = [
-                        (ratio, 0, refresh_steps)
+                        (ratio, 0, refresh_steps, "none")
                         for ratio in args.keep_ratios
                         for refresh_steps in args.child_refresh_steps
                     ]
                 elif model == "ssb-v6":
                     configurations = [
-                        (1.0, 0, score_steps)
+                        (args.v6_keep_ratio, 0, score_steps, selector)
                         for score_steps in args.score_refresh_steps
+                        for selector in args.v6_selection_methods
                     ]
                 else:
-                    configurations = [(ratio, 0, 0) for ratio in args.keep_ratios]
+                    configurations = [(ratio, 0, 0, "none") for ratio in args.keep_ratios]
 
-                for ratio, block_size, refresh_steps in configurations:
+                for ratio, block_size, refresh_steps, selector in configurations:
                     for seed in range(1, args.runs + 1):
                         model_root = (
                             args.results_dir
@@ -124,8 +131,7 @@ def build_jobs(args, datasets):
                         elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
                         elif model == "ssb-v6":
-                            retention = str(args.v6_gradient_retention).replace('.', '_')
-                            leaf = f"gradient_retention_{retention}/score_refresh_{refresh_steps}/seed_{seed:02d}"
+                            leaf = f"selector_{selector}/{keep_dir(ratio)}/score_refresh_{refresh_steps}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
 
@@ -137,6 +143,7 @@ def build_jobs(args, datasets):
                                 ratio,
                                 block_size,
                                 refresh_steps,
+                                selector,
                                 seed,
                                 model_root / leaf,
                             )
@@ -147,7 +154,7 @@ def build_jobs(args, datasets):
 
 def print_plan(jobs, args):
     counts = Counter()
-    for _, _, model, _, _, _, _, _ in jobs:
+    for _, _, model, _, _, _, _, _, _ in jobs:
         if model == "dense":
             counts["dense"] += 1
         elif model in BLOCK_MODELS:
@@ -198,6 +205,11 @@ def main():
     parser.add_argument("--child-refresh-steps", nargs="+", type=int, default=[1, 10, 25, 100], help="For V4/V5 only: resample the structured child exactly every N optimizer steps.")
     parser.add_argument("--score-refresh-steps", nargs="+", type=int, default=[10, 25, 100], help="For V6 only: dense-score and rebuild the gradient-ranked child every N optimizer steps.")
     parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="Dynamic V6 retains this fraction of per-layer squared gradient energy.")
+    parser.add_argument("--v6-keep-ratio", type=float, default=0.20, help="Fixed V6 child width ratio (independent of other model sweeps).")
+    parser.add_argument("--v6-selection-methods", nargs="+", choices=["gradient_l2", "weight_l2", "taylor"], default=["weight_l2", "taylor"])
+    parser.add_argument("--v6-disable-early-bird", action="store_true", help="Keep refreshing V6 masks for the whole run.")
+    parser.add_argument("--v6-stability-window", type=int, default=5)
+    parser.add_argument("--v6-stability-threshold", type=float, default=0.10)
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--stop-at-convergence", action="store_true", help="Use validation-loss early stopping instead of a fixed epoch count.")
@@ -224,7 +236,7 @@ def main():
     if args.dry_run:
         return
 
-    for index, (dataset, architecture, model, ratio, block_size, refresh_steps, seed, output_dir) in enumerate(jobs, start=1):
+    for index, (dataset, architecture, model, ratio, block_size, refresh_steps, selector, seed, output_dir) in enumerate(jobs, start=1):
         required = [
             output_dir / "epochs.csv",
             output_dir / "batches.csv",
@@ -269,9 +281,14 @@ def main():
         if model == "ssb-v6":
             command.extend([
                 "--score-refresh-steps", str(refresh_steps),
-                "--v6-selection-mode", "gradient_retention",
+                "--v6-selection-mode", "fixed",
                 "--v6-gradient-retention", str(args.v6_gradient_retention),
+                "--v6-selection-method", selector,
+                "--v6-stability-window", str(args.v6_stability_window),
+                "--v6-stability-threshold", str(args.v6_stability_threshold),
             ])
+            if not args.v6_disable_early_bird:
+                command.append("--v6-early-bird")
 
         print()
         print(f"[{index}/{len(jobs)}] {' '.join(command)}")

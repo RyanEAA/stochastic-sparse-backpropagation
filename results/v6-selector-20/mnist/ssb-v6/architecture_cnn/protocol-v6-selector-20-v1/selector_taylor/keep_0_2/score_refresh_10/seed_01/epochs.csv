@@ -1,0 +1,11 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,score_refresh_steps,v6_selection_mode,v6_gradient_retention,v6_selection_method,v6_early_bird,v6_stability_window,v6_stability_threshold,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,1,0.547461953218778,0.8333,0.22480574997663497,0.934,10.932147874991642,1,1,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,2,0.1673946175456047,0.94975,0.14884185202419759,0.9533,10.640656375006074,1,2,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,3,0.11713363319436709,0.9647,0.08025196818783879,0.9726,10.652309832992614,1,3,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,4,0.08262951218485833,0.9747333333333333,0.07300435322900303,0.9764,10.679042625008151,1,4,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,5,0.06821603387792906,0.97915,0.0576800178444013,0.9806,10.079528792004567,1,5,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,6,0.05067780192693074,0.9840166666666667,0.048217056775151285,0.9827,9.334433374999207,1,6,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,7,0.042201416129867234,0.98695,0.04348304115004721,0.9863,9.330756916999235,1,7,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,8,0.03537895682255427,0.9883833333333333,0.044279938165744534,0.9851,9.337477624998428,0,7,1
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,9,0.031206246903787056,0.9899,0.04114410276949056,0.9867,9.347764707999886,1,9,0
+2bc56f8d14c9095e,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,10,fixed,,taylor,True,5,0.1,1,10,0.026547900164375703,0.99155,0.04096206213987316,0.9878,9.283358583998051,1,10,0

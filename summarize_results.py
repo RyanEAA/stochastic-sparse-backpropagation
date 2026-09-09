@@ -13,6 +13,10 @@ def add_compatibility_columns(frame):
         "score_refresh_steps": 0,
         "v6_gradient_retention": float("nan"),
         "v6_selection_mode": "none",
+        "v6_selection_method": "none",
+        "v6_early_bird": False,
+        "v6_stability_window": 0,
+        "v6_stability_threshold": float("nan"),
         "run_id": "",
     }
     for column, default in defaults.items():
@@ -56,6 +60,10 @@ def main():
         "score_refresh_steps",
         "v6_gradient_retention",
         "v6_selection_mode",
+        "v6_selection_method",
+        "v6_early_bird",
+        "v6_stability_window",
+        "v6_stability_threshold",
         "seed",
     ]
     experiment_keys = run_keys[:-1]
@@ -81,7 +89,14 @@ def main():
     if "gradient_scoring_event" in batches.columns:
         batch_aggs["gradient_scoring_events"] = ("gradient_scoring_event", "sum")
         batch_aggs["dense_scoring_time_s"] = ("dense_scoring_time_s", "sum")
+        if "selector_scoring_time_s" in batches.columns:
+            batch_aggs["selector_scoring_time_s"] = ("selector_scoring_time_s", "sum")
         batch_aggs["child_rebuild_time_s"] = ("child_rebuild_time_s", "sum")
+    if "topology_frozen" in batches.columns:
+        batch_aggs["topology_frozen"] = ("topology_frozen", "max")
+        batch_aggs["topology_freeze_step"] = ("topology_freeze_step", "max")
+    if "mask_distance" in batches.columns:
+        batch_aggs["mask_distance_mean"] = ("mask_distance", "mean")
     if "effective_keep_ratio" in batches.columns:
         batch_aggs["effective_keep_ratio_mean"] = ("effective_keep_ratio", "mean")
         batch_aggs["effective_keep_ratio_min"] = ("effective_keep_ratio", "min")
@@ -116,6 +131,7 @@ def main():
         **({
             "gradient_scoring_events_mean": ("gradient_scoring_events", "mean"),
             "dense_scoring_time_mean": ("dense_scoring_time_s", "mean"),
+            **({"selector_scoring_time_mean": ("selector_scoring_time_s", "mean")} if "selector_scoring_time_s" in per_run.columns else {}),
             "child_rebuild_time_mean": ("child_rebuild_time_s", "mean"),
         } if "gradient_scoring_events" in per_run.columns else {}),
         **({
@@ -123,6 +139,11 @@ def main():
             "effective_keep_ratio_min": ("effective_keep_ratio_min", "mean"),
             "effective_keep_ratio_max": ("effective_keep_ratio_max", "mean"),
         } if "effective_keep_ratio_mean" in per_run.columns else {}),
+        **({
+            "topology_frozen_fraction": ("topology_frozen", "mean"),
+            "topology_freeze_step_mean": ("topology_freeze_step", "mean"),
+        } if "topology_frozen" in per_run.columns else {}),
+        **({"mask_distance_mean": ("mask_distance_mean", "mean")} if "mask_distance_mean" in per_run.columns else {}),
     )
 
     output = root / "summary.csv"

@@ -4,7 +4,10 @@ from torch import nn
 from algorithms.ssb.v6 import GradientSelectedChildModelV6
 from algorithms.ssb.v6.gradient_selected_child import (
     gradient_retention_indices,
+    selected_unit_mask_distance,
     structured_gradient_l2,
+    structured_taylor,
+    structured_weight_l2,
     topk_structured_indices,
 )
 from models.common.cnn import DenseCNN
@@ -42,6 +45,53 @@ def test_known_gradient_ranking_selects_expected_neurons():
     scores = structured_gradient_l2(gradient)
     assert torch.equal(scores, torch.tensor([5.0, 1.0, 10.0, 2.0]))
     assert torch.equal(topk_structured_indices(scores, 0.5), torch.tensor([0, 2]))
+
+
+def test_weight_l2_and_taylor_scores_are_structured_per_output_unit():
+    weight = torch.tensor([[3.0, 4.0], [1.0, 0.0]])
+    gradient = torch.tensor([[2.0, -1.0], [7.0, 3.0]])
+    assert torch.equal(structured_weight_l2(weight), torch.tensor([5.0, 1.0]))
+    assert torch.equal(structured_taylor(weight, gradient), torch.tensor([10.0, 7.0]))
+
+
+def test_selected_unit_mask_distance_counts_replacements():
+    previous = [torch.tensor([0, 2]), torch.tensor([1, 3])]
+    current = [torch.tensor([0, 1]), torch.tensor([1, 3])]
+    assert selected_unit_mask_distance(previous, current) == 0.25
+
+
+def test_weight_l2_scoring_does_not_run_dense_forward_or_backward():
+    master = DenseMLP(3, [4], 2)
+    model = GradientSelectedChildModelV6(
+        master, keep_ratio=0.5, score_refresh_steps=1, selection_method="weight_l2"
+    )
+    model.refresh_child()
+    optimizer = model.make_optimizer(1e-3)
+
+    def forbidden_criterion(*_args):
+        raise AssertionError("weight-L2 selection must not evaluate a dense loss")
+
+    optimizer, scored = model.score_and_refresh(
+        torch.randn(2, 3), torch.tensor([0, 1]), forbidden_criterion, optimizer, 1e-3
+    )
+    assert scored and optimizer is not None
+
+
+def test_early_bird_freezes_after_configured_stable_window():
+    master = DenseMLP(3, [5], 2)
+    model = GradientSelectedChildModelV6(
+        master, keep_ratio=0.2, score_refresh_steps=1, selection_method="weight_l2",
+        early_bird=True, stability_window=3, stability_threshold=0.0,
+    )
+    hidden = [m for m in master.net if isinstance(m, nn.Linear)][0]
+    model._importance[hidden] = torch.tensor([9.0, 1.0, 1.0, 1.0, 1.0])
+    for event in range(4):
+        model.scoring_event_count = event
+        model.refresh_child()
+        model._update_early_bird_state()
+    assert model.topology_frozen
+    assert model.topology_freeze_scoring_event == 4
+    assert not model.scoring_due()
 
 
 def test_v6_mlp_is_smaller_and_uses_ranked_indices():

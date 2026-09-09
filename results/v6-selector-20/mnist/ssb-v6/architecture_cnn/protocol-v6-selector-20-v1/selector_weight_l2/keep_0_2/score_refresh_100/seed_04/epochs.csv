@@ -1,0 +1,11 @@
+run_id,dataset,model,architecture,protocol_version,keep_ratio,block_size,child_refresh_steps,score_refresh_steps,v6_selection_mode,v6_gradient_retention,v6_selection_method,v6_early_bird,v6_stability_window,v6_stability_threshold,seed,epoch,train_loss,train_accuracy,val_loss,val_accuracy,epoch_time_s,is_best_val_loss,best_epoch_so_far,epochs_without_improvement
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,1,0.41714379921356837,0.88115,0.14508000761866569,0.9549,9.703664790999028,1,1,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,2,0.11473266705274582,0.9648166666666667,0.07511905386149884,0.9759,9.348602250000113,1,2,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,3,0.07831513142585754,0.9758333333333333,0.06787532731220126,0.9782,9.308313249988714,1,3,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,4,0.06147121822883685,0.9810666666666666,0.051231972924619916,0.9835,9.392002416003379,1,4,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,5,0.05152691139280796,0.9840166666666667,0.051440225579589605,0.9826,9.386732667000615,0,4,1
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,6,0.04421621179903547,0.9863,0.04618067910969258,0.9842,9.358942582999589,1,6,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,7,0.03785920540591081,0.98815,0.05217944178879261,0.9825,9.373000666993903,0,6,1
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,8,0.03356330636069178,0.9897,0.057618066132068636,0.9802,9.301649666987942,0,6,2
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,9,0.02909424206117789,0.99115,0.03980998061504215,0.9866,9.370854458000395,1,9,0
+94b6f700a499d040,mnist,ssb-v6,cnn,protocol-v6-selector-20-v1,0.2,0,0,100,fixed,,weight_l2,True,5,0.1,4,10,0.025202255065366625,0.9918,0.03639986976087093,0.988,9.371401249998598,1,10,0

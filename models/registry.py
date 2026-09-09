@@ -33,6 +33,10 @@ def build_model(
     score_refresh_steps: int = 100,
     v6_selection_mode: str = "fixed",
     v6_gradient_retention: float = 0.90,
+    v6_selection_method: str = "gradient_l2",
+    v6_early_bird: bool = False,
+    v6_stability_window: int = 5,
+    v6_stability_threshold: float = 0.10,
 ):
     dataset = dataset.lower().replace('-', '_')
     model = model.lower()
@@ -64,6 +68,10 @@ def build_model(
                 score_refresh_steps=score_refresh_steps,
                 selection_mode=v6_selection_mode,
                 gradient_retention=v6_gradient_retention,
+                selection_method=v6_selection_method,
+                early_bird=v6_early_bird,
+                stability_window=v6_stability_window,
+                stability_threshold=v6_stability_threshold,
             )
         builder = build_structured_backward_v51 if model == "ssb-v5.1" else (build_structured_child_v5 if model == "ssb-v5" else build_structured_child)
         return builder(

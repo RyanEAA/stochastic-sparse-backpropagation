@@ -57,6 +57,7 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         refresh_count_before = int(getattr(model, "refresh_count", 0))
         topology_before = model.topology_signature() if hasattr(model, "topology_signature") else ""
         scoring_event = False
+        selector_scoring_time_s = 0.0
         dense_scoring_time_s = 0.0
         child_rebuild_time_s = 0.0
         if getattr(model, "is_v6_gradient_selected", False):
@@ -64,6 +65,7 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 x, y, criterion, optimizer, learning_rate
             )
             if scoring_event:
+                selector_scoring_time_s = model.last_selector_scoring_time_s
                 dense_scoring_time_s = model.last_dense_scoring_time_s
                 child_rebuild_time_s = model.last_child_rebuild_time_s
         optimizer.zero_grad(set_to_none=True)
@@ -119,6 +121,7 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 child_topology_after=topology_after,
                 gradient_scoring_event=int(scoring_event),
                 gradient_scoring_event_count=int(getattr(model, "scoring_event_count", 0)),
+                selector_scoring_time_s=selector_scoring_time_s,
                 dense_scoring_time_s=dense_scoring_time_s,
                 child_rebuild_time_s=child_rebuild_time_s,
                 active_structured_units=(model.active_structured_units() if getattr(model, "is_v6_gradient_selected", False) else 0),
@@ -127,6 +130,10 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 importance_min=importance_min,
                 importance_mean=importance_mean,
                 importance_max=importance_max,
+                mask_distance=float(getattr(model, "last_mask_distance", float("nan"))),
+                topology_frozen=int(getattr(model, "topology_frozen", False)),
+                topology_freeze_step=int(getattr(model, "topology_freeze_step", 0)),
+                topology_freeze_scoring_event=int(getattr(model, "topology_freeze_scoring_event", 0)),
             )
         )
     synchronize(device)
@@ -165,6 +172,10 @@ def main():
     parser.add_argument("--score-refresh-steps", type=int, default=100, help="For V6: run dense gradient scoring and rebuild the top-k child every N optimizer steps.")
     parser.add_argument("--v6-selection-mode", choices=["fixed", "gradient_retention"], default="fixed")
     parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="For dynamic V6: smallest child retaining this fraction of per-layer squared gradient energy.")
+    parser.add_argument("--v6-selection-method", choices=["gradient_l2", "weight_l2", "taylor"], default="gradient_l2", help="Structured-unit score used by V6.")
+    parser.add_argument("--v6-early-bird", action="store_true", help="Freeze the V6 topology once recent mask distances are stable.")
+    parser.add_argument("--v6-stability-window", type=int, default=5, help="Number of consecutive mask distances used by Early-Bird.")
+    parser.add_argument("--v6-stability-threshold", type=float, default=0.10, help="Maximum mask replacement fraction considered stable.")
     parser.add_argument("--epochs", type=int, default=3, help="Fixed epoch count when --stop-at-convergence is not used.")
     parser.add_argument("--stop-at-convergence", action="store_true", help="Stop when validation loss has not improved by --min-delta for --patience epochs.")
     parser.add_argument("--max-epochs", type=int, default=100, help="Safety cap when --stop-at-convergence is enabled.")
@@ -193,6 +204,10 @@ def main():
         raise ValueError("score_refresh_steps must be positive for SSB-V6.")
     if args.model == "ssb-v6" and not 0 < args.v6_gradient_retention <= 1:
         raise ValueError("v6_gradient_retention must be in (0, 1].")
+    if args.v6_stability_window < 1:
+        raise ValueError("v6_stability_window must be >= 1.")
+    if not 0 <= args.v6_stability_threshold <= 1:
+        raise ValueError("v6_stability_threshold must be in [0, 1].")
     if args.stop_at_convergence and args.max_epochs < 1:
         raise ValueError("max_epochs must be >= 1.")
     if args.stop_at_convergence and args.patience < 1:
@@ -215,6 +230,10 @@ def main():
         score_refresh_steps=args.score_refresh_steps,
         v6_selection_mode=args.v6_selection_mode,
         v6_gradient_retention=args.v6_gradient_retention,
+        v6_selection_method=args.v6_selection_method,
+        v6_early_bird=args.v6_early_bird,
+        v6_stability_window=args.v6_stability_window,
+        v6_stability_threshold=args.v6_stability_threshold,
     )
     initialize_model_parameters(model, args.seed)
     model = model.to(device)
@@ -240,6 +259,10 @@ def main():
         "score_refresh_steps": args.score_refresh_steps if args.model == "ssb-v6" else 0,
         "v6_selection_mode": args.v6_selection_mode if args.model == "ssb-v6" else None,
         "v6_gradient_retention": args.v6_gradient_retention if args.model == "ssb-v6" and args.v6_selection_mode == "gradient_retention" else None,
+        "v6_selection_method": args.v6_selection_method if args.model == "ssb-v6" else None,
+        "v6_early_bird": bool(args.v6_early_bird) if args.model == "ssb-v6" else False,
+        "v6_stability_window": args.v6_stability_window if args.model == "ssb-v6" else 0,
+        "v6_stability_threshold": args.v6_stability_threshold if args.model == "ssb-v6" else None,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
@@ -315,6 +338,10 @@ def main():
         "score_refresh_steps": identity["score_refresh_steps"],
         "v6_selection_mode": identity["v6_selection_mode"],
         "v6_gradient_retention": identity["v6_gradient_retention"],
+        "v6_selection_method": identity["v6_selection_method"],
+        "v6_early_bird": identity["v6_early_bird"],
+        "v6_stability_window": identity["v6_stability_window"],
+        "v6_stability_threshold": identity["v6_stability_threshold"],
         "seed": args.seed,
     }
     global_step = 0
@@ -379,8 +406,12 @@ def main():
         "converged_by_patience": stop_reason == "validation_loss_patience",
         "gradient_scoring_events": int(getattr(model, "scoring_event_count", 0)),
         "dense_scoring_time_s": float(getattr(model, "dense_scoring_time_s", 0.0)),
+        "selector_scoring_time_s": float(getattr(model, "selector_scoring_time_s", 0.0)),
         "child_rebuild_time_s": float(getattr(model, "child_rebuild_time_s", 0.0)),
         "final_effective_keep_ratio": float(model.effective_keep_ratio()) if getattr(model, "is_v6_gradient_selected", False) else None,
+        "topology_frozen": bool(getattr(model, "topology_frozen", False)),
+        "topology_freeze_step": int(getattr(model, "topology_freeze_step", 0)),
+        "topology_freeze_scoring_event": int(getattr(model, "topology_freeze_scoring_event", 0)),
     })
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
 
@@ -396,6 +427,10 @@ def main():
         "score_refresh_steps",
         "v6_selection_mode",
         "v6_gradient_retention",
+        "v6_selection_method",
+        "v6_early_bird",
+        "v6_stability_window",
+        "v6_stability_threshold",
         "seed",
     ]
     write_csv(
@@ -407,7 +442,7 @@ def main():
     write_csv(
         args.output_dir / "batches.csv",
         batch_rows,
-        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max"],
+        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "selector_scoring_time_s", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max", "mask_distance", "topology_frozen", "topology_freeze_step", "topology_freeze_scoring_event"],
     )
 
 
