@@ -38,6 +38,10 @@ def build_model(
     v6_early_bird: bool = False,
     v6_stability_window: int = 5,
     v6_stability_threshold: float = 0.10,
+    v7_dense_correction_steps: int = 0,
+    v7_layer_keep_ratios=None,
+    v7_early_bird_min_events: int = 0,
+    v7_early_bird_min_steps: int = 0,
 ):
     dataset = dataset.lower().replace('-', '_')
     model = model.lower()
@@ -74,6 +78,12 @@ def build_model(
                 early_bird=v6_early_bird,
                 stability_window=v6_stability_window,
                 stability_threshold=v6_stability_threshold,
+                **({
+                    "dense_correction_steps": v7_dense_correction_steps,
+                    "layer_keep_ratios": v7_layer_keep_ratios,
+                    "early_bird_min_events": v7_early_bird_min_events,
+                    "early_bird_min_steps": v7_early_bird_min_steps,
+                } if model == "ssb-v7" else {}),
             )
         builder = build_structured_backward_v51 if model == "ssb-v5.1" else (build_structured_child_v5 if model == "ssb-v5" else build_structured_child)
         return builder(

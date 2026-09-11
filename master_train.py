@@ -40,6 +40,16 @@ DEFAULT_MODELS = [
     "ssb-v3-block",
 ]
 BLOCK_MODELS = {"ssb-v1-block", "ssb-v2-block", "ssb-v3-block"}
+V7_HYBRID_CONFIGS = (
+    "pure",
+    "warmup",
+    "correction",
+    "warmup_correction",
+    "layerwise",
+    "layerwise_warmup",
+    "layerwise_correction",
+    "layerwise_hybrid",
+)
 
 
 def keep_dir(ratio):
@@ -81,6 +91,14 @@ def validate_args(args):
         raise ValueError("--v6-stability-window must be >= 1")
     if not 0 <= args.v6_stability_threshold <= 1:
         raise ValueError("--v6-stability-threshold must be in [0, 1]")
+    if args.v7_warmup_epochs < 0:
+        raise ValueError("--v7-warmup-epochs must be >= 0")
+    if args.v7_correction_steps < 1:
+        raise ValueError("--v7-correction-steps must be >= 1")
+    if args.v7_early_bird_min_events < 0 or args.v7_early_bird_min_steps < 0:
+        raise ValueError("V7 Early-Bird minimums must be >= 0")
+    if any(ratio <= 0 or ratio > 1 for ratio in args.v7_layer_keep_ratios):
+        raise ValueError("all --v7-layer-keep-ratios must satisfy 0 < ratio <= 1")
 
 
 def build_jobs(args, datasets):
@@ -91,29 +109,36 @@ def build_jobs(args, datasets):
             for model in args.models:
                 if model == "dense":
                     # Dense has no keep-ratio/block-size/refresh dimension.
-                    configurations = [(1.0, 0, 0, "none")]
+                    configurations = [(1.0, 0, 0, "none", "none")]
                 elif model in BLOCK_MODELS:
                     configurations = [
-                        (ratio, block_size, 0, "none")
+                        (ratio, block_size, 0, "none", "none")
                         for ratio in args.keep_ratios
                         for block_size in args.block_sizes
                     ]
                 elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                     configurations = [
-                        (ratio, 0, refresh_steps, "none")
+                        (ratio, 0, refresh_steps, "none", "none")
                         for ratio in args.keep_ratios
                         for refresh_steps in args.child_refresh_steps
                     ]
-                elif model in {"ssb-v6", "ssb-v7"}:
+                elif model == "ssb-v6":
                     configurations = [
-                        (args.v6_keep_ratio, 0, score_steps, selector)
+                        (args.v6_keep_ratio, 0, score_steps, selector, "none")
                         for score_steps in args.score_refresh_steps
                         for selector in args.v6_selection_methods
                     ]
+                elif model == "ssb-v7":
+                    configurations = [
+                        (args.v6_keep_ratio, 0, score_steps, selector, hybrid)
+                        for score_steps in args.score_refresh_steps
+                        for selector in args.v6_selection_methods
+                        for hybrid in args.v7_hybrid_configs
+                    ]
                 else:
-                    configurations = [(ratio, 0, 0, "none") for ratio in args.keep_ratios]
+                    configurations = [(ratio, 0, 0, "none", "none") for ratio in args.keep_ratios]
 
-                for ratio, block_size, refresh_steps, selector in configurations:
+                for ratio, block_size, refresh_steps, selector, hybrid in configurations:
                     for seed in range(1, args.runs + 1):
                         model_root = (
                             args.results_dir
@@ -132,7 +157,8 @@ def build_jobs(args, datasets):
                         elif model in {"ssb-v4", "ssb-v5", "ssb-v5.1"}:
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
                         elif model in {"ssb-v6", "ssb-v7"}:
-                            leaf = f"selector_{selector}/{keep_dir(ratio)}/score_refresh_{refresh_steps}/seed_{seed:02d}"
+                            hybrid_dir = f"/hybrid_{hybrid}" if model == "ssb-v7" else ""
+                            leaf = f"selector_{selector}/{keep_dir(ratio)}/score_refresh_{refresh_steps}{hybrid_dir}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
 
@@ -145,6 +171,7 @@ def build_jobs(args, datasets):
                                 block_size,
                                 refresh_steps,
                                 selector,
+                                hybrid,
                                 seed,
                                 model_root / leaf,
                             )
@@ -155,7 +182,7 @@ def build_jobs(args, datasets):
 
 def print_plan(jobs, args):
     counts = Counter()
-    for _, _, model, _, _, _, _, _, _ in jobs:
+    for _, _, model, _, _, _, _, _, _, _ in jobs:
         if model == "dense":
             counts["dense"] += 1
         elif model in BLOCK_MODELS:
@@ -207,10 +234,16 @@ def main():
     parser.add_argument("--score-refresh-steps", nargs="+", type=int, default=[10, 25, 100], help="For V6 only: dense-score and rebuild the gradient-ranked child every N optimizer steps.")
     parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="Dynamic V6 retains this fraction of per-layer squared gradient energy.")
     parser.add_argument("--v6-keep-ratio", type=float, default=0.20, help="Fixed V6 child width ratio (independent of other model sweeps).")
-    parser.add_argument("--v6-selection-methods", nargs="+", choices=["gradient_l2", "weight_l2", "taylor"], default=["weight_l2", "taylor"])
+    parser.add_argument("--v6-selection-methods", nargs="+", choices=["random", "gradient_l2", "weight_l2", "taylor"], default=["weight_l2", "taylor"])
     parser.add_argument("--v6-disable-early-bird", action="store_true", help="Keep refreshing V6 masks for the whole run.")
     parser.add_argument("--v6-stability-window", type=int, default=5)
     parser.add_argument("--v6-stability-threshold", type=float, default=0.10)
+    parser.add_argument("--v7-hybrid-configs", nargs="+", choices=V7_HYBRID_CONFIGS, default=["pure"], help="Named V7 accuracy/speed configurations to compare without creating an unintended Cartesian grid.")
+    parser.add_argument("--v7-warmup-epochs", type=int, default=1, help="Dense warm-up used by V7 warmup/hybrid configurations.")
+    parser.add_argument("--v7-correction-steps", type=int, default=25, help="Sparse updates between dense corrective batches in V7 correction/hybrid configurations.")
+    parser.add_argument("--v7-layer-keep-ratios", nargs="+", type=float, default=[1.0, 0.5, 0.2], help="Forward-order hidden-layer ratios for layerwise_hybrid; default matches the current two-conv/one-hidden CNN.")
+    parser.add_argument("--v7-early-bird-min-events", type=int, default=10)
+    parser.add_argument("--v7-early-bird-min-steps", type=int, default=0)
     parser.add_argument("--timing-detail", choices=["basic", "full"], default="basic")
     parser.add_argument("--record-batch-metrics", action="store_true")
     parser.add_argument("--runs", type=int, default=20)
@@ -239,7 +272,7 @@ def main():
     if args.dry_run:
         return
 
-    for index, (dataset, architecture, model, ratio, block_size, refresh_steps, selector, seed, output_dir) in enumerate(jobs, start=1):
+    for index, (dataset, architecture, model, ratio, block_size, refresh_steps, selector, hybrid, seed, output_dir) in enumerate(jobs, start=1):
         required = [
             output_dir / "epochs.csv",
             output_dir / "batches.csv",
@@ -295,6 +328,27 @@ def main():
             ])
             if not args.v6_disable_early_bird:
                 command.append("--v6-early-bird")
+        if model == "ssb-v7" and hybrid != "pure":
+            if hybrid in {
+                "warmup", "warmup_correction", "layerwise_warmup",
+                "layerwise_hybrid",
+            }:
+                command.extend(["--v7-dense-warmup-epochs", str(args.v7_warmup_epochs)])
+            if hybrid in {
+                "correction", "warmup_correction", "layerwise_correction",
+                "layerwise_hybrid",
+            }:
+                command.extend(["--v7-dense-correction-steps", str(args.v7_correction_steps)])
+            if hybrid in {
+                "layerwise", "layerwise_warmup", "layerwise_correction",
+                "layerwise_hybrid",
+            }:
+                command.append("--v7-layer-keep-ratios")
+                command.extend(str(ratio) for ratio in args.v7_layer_keep_ratios)
+            command.extend([
+                "--v7-early-bird-min-events", str(args.v7_early_bird_min_events),
+                "--v7-early-bird-min-steps", str(args.v7_early_bird_min_steps),
+            ])
 
         print()
         print(f"[{index}/{len(jobs)}] {' '.join(command)}")

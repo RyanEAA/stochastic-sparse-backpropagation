@@ -78,6 +78,26 @@ def test_weight_l2_scoring_does_not_run_dense_forward_or_backward():
     assert scored and optimizer is not None
 
 
+def test_random_scoring_is_a_cheap_matched_selector_control():
+    torch.manual_seed(17)
+    master = DenseMLP(3, [6], 2)
+    model = GradientSelectedChildModelV6(
+        master, keep_ratio=0.5, score_refresh_steps=1, selection_method="random"
+    )
+    model.refresh_child()
+    optimizer = model.make_optimizer(1e-3)
+
+    def forbidden_criterion(*_args):
+        raise AssertionError("random selection must not evaluate a dense loss")
+
+    optimizer, scored = model.score_and_refresh(
+        torch.randn(2, 3), torch.tensor([0, 1]), forbidden_criterion, optimizer, 1e-3
+    )
+    assert scored and optimizer is not None
+    assert model._importance
+    assert all(scores.ndim == 1 for scores in model._importance.values())
+
+
 def test_early_bird_freezes_after_configured_stable_window():
     master = DenseMLP(3, [5], 2)
     model = GradientSelectedChildModelV6(
@@ -220,3 +240,76 @@ def test_v7_does_not_scatter_master_adam_state_on_ordinary_steps():
     model.after_optimizer_step(optimizer, 1e-3)
     assert calls == []
     assert model.optimizer_step_count == 2
+
+
+def test_v7_layerwise_cnn_shorthand_expands_by_layer_family():
+    model = OptimizedSelectedChildModelV7(
+        DenseCNN(3, 16, [4, 6, 8], [10, 5], 3, pooled_size=2),
+        keep_ratio=0.2,
+        score_refresh_steps=25,
+        selection_method="weight_l2",
+        layer_keep_ratios=[1.0, 0.5, 0.2],
+    )
+    model.refresh_child()
+    # First conv dense, later convs at 50%, classifier hidden layers at 20%.
+    assert [mapping.out_idx.numel() for mapping in model._maps[:-1]] == [4, 3, 4, 2, 1]
+
+
+def test_v7_early_bird_respects_minimum_scoring_events():
+    model = OptimizedSelectedChildModelV7(
+        DenseMLP(3, [5], 2),
+        keep_ratio=0.2,
+        score_refresh_steps=1,
+        selection_method="weight_l2",
+        early_bird=True,
+        stability_window=2,
+        stability_threshold=0.0,
+        early_bird_min_events=4,
+    )
+    hidden = [module for module in model.master.net if isinstance(module, nn.Linear)][0]
+    model._importance[hidden] = torch.tensor([9.0, 1.0, 1.0, 1.0, 1.0])
+    for event in range(3):
+        model.scoring_event_count = event
+        model.refresh_child()
+        model._update_early_bird_state()
+        assert not model.topology_frozen
+    model.scoring_event_count = 3
+    model.refresh_child()
+    model._update_early_bird_state()
+    assert model.topology_frozen
+
+
+def test_v7_dense_correction_preserves_dense_update_and_rebuilds_child():
+    torch.manual_seed(9)
+    model = OptimizedSelectedChildModelV7(
+        DenseMLP(4, [6], 3),
+        keep_ratio=0.5,
+        score_refresh_steps=10,
+        selection_method="weight_l2",
+        dense_correction_steps=1,
+    )
+    model.refresh_child()
+    child_optimizer = model.make_optimizer(1e-3)
+    model.after_optimizer_step(child_optimizer, 1e-3)
+    assert model.dense_correction_due()
+
+    master_optimizer = model.prepare_dense_correction(child_optimizer, 1e-3)
+    x = torch.randn(8, 4)
+    y = torch.randint(0, 3, (8,))
+    master_optimizer.zero_grad(set_to_none=True)
+    loss = nn.CrossEntropyLoss()(model.master(x), y)
+    loss.backward()
+    before = [parameter.detach().clone() for parameter in model.master.parameters()]
+    master_optimizer.step()
+    after = [parameter.detach().clone() for parameter in model.master.parameters()]
+    child_optimizer = model.finish_dense_correction(master_optimizer, 1e-3)
+
+    assert any(not torch.equal(left, right) for left, right in zip(before, after))
+    assert all(
+        torch.equal(parameter, expected)
+        for parameter, expected in zip(model.master.parameters(), after)
+    )
+    assert model.child is not None
+    assert child_optimizer.state
+    assert model.dense_correction_count == 1
+    assert not model.dense_correction_due()

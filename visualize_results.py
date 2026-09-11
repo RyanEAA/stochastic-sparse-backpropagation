@@ -32,6 +32,19 @@ def config_label(row):
     if pd.notna(selector) and str(selector) not in {"", "none"}:
         parts.append(str(selector).replace("_", "-"))
 
+    warmup = row.get("v7_dense_warmup_epochs", 0)
+    if pd.notna(warmup) and int(warmup) > 0:
+        parts.append(f"warmup={int(warmup)}e")
+
+    correction = row.get("v7_dense_correction_steps", 0)
+    if pd.notna(correction) and int(correction) > 0:
+        parts.append(f"dense/{int(correction)}")
+
+    layer_ratios = row.get("v7_layer_keep_ratios", None)
+    if pd.notna(layer_ratios) and str(layer_ratios) not in {"", "null", "None"}:
+        compact = str(layer_ratios).replace(" ", "")
+        parts.append(f"layers={compact}")
+
     return "\n".join(parts)
 
 
@@ -39,7 +52,7 @@ def bar_metric(df, mean, std, ylabel, title, path):
     plot_df = df.copy()
     plot_df["config_label"] = plot_df.apply(config_label, axis=1)
     plot_df = plot_df.sort_values(
-        ["model", "keep_ratio", "block_size", "child_refresh_steps", "score_refresh_steps", "v6_selection_method"],
+        ["model", "keep_ratio", "block_size", "child_refresh_steps", "score_refresh_steps", "v6_selection_method", "v7_dense_warmup_epochs", "v7_dense_correction_steps", "v7_layer_keep_ratios"],
         na_position="last",
     )
 
@@ -75,6 +88,9 @@ def main():
         "child_refresh_steps": 0,
         "score_refresh_steps": 0,
         "v6_selection_method": "none",
+        "v7_dense_warmup_epochs": 0,
+        "v7_dense_correction_steps": 0,
+        "v7_layer_keep_ratios": "null",
     }
     for column, default in defaults.items():
         if column not in df.columns:
@@ -97,6 +113,35 @@ def main():
             f"{prefix}: validation accuracy by configuration",
             directory / "validation_accuracy_bars.png",
         )
+        if "child_val_accuracy_mean" in group.columns and group["child_val_accuracy_mean"].notna().any():
+            child_group = group[group["child_val_accuracy_mean"].notna()]
+            bar_metric(
+                child_group,
+                "child_val_accuracy_mean",
+                "child_val_accuracy_std",
+                "Child validation accuracy",
+                f"{prefix}: trained child validation accuracy by configuration",
+                directory / "child_validation_accuracy_bars.png",
+            )
+        if "final_val_accuracy_mean" in group.columns:
+            bar_metric(
+                group,
+                "final_val_accuracy_mean",
+                "final_val_accuracy_std",
+                "Final validation accuracy",
+                f"{prefix}: final-epoch validation accuracy by configuration",
+                directory / "final_validation_accuracy_bars.png",
+            )
+        if "final_child_val_accuracy_mean" in group.columns and group["final_child_val_accuracy_mean"].notna().any():
+            final_child_group = group[group["final_child_val_accuracy_mean"].notna()]
+            bar_metric(
+                final_child_group,
+                "final_child_val_accuracy_mean",
+                "final_child_val_accuracy_std",
+                "Final child validation accuracy",
+                f"{prefix}: final-epoch child accuracy by configuration",
+                directory / "final_child_validation_accuracy_bars.png",
+            )
         bar_metric(
             group,
             "epoch_time_mean",

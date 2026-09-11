@@ -124,6 +124,8 @@ def build_optimized_selected_v7(
     selection_mode="fixed", gradient_retention=0.90,
     selection_method="gradient_l2", early_bird=False,
     stability_window=5, stability_threshold=0.10,
+    dense_correction_steps=0, layer_keep_ratios=None,
+    early_bird_min_events=0, early_bird_min_steps=0,
 ):
     """Build SSB V7: V6 selection without per-step master-state scattering."""
     master = build_dense(config, architecture)
@@ -132,4 +134,8 @@ def build_optimized_selected_v7(
         selection_mode=selection_mode, gradient_retention=gradient_retention,
         selection_method=selection_method, early_bird=early_bird,
         stability_window=stability_window, stability_threshold=stability_threshold,
+        dense_correction_steps=dense_correction_steps,
+        layer_keep_ratios=layer_keep_ratios,
+        early_bird_min_events=early_bird_min_events,
+        early_bird_min_steps=early_bird_min_steps,
     )

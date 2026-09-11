@@ -17,9 +17,17 @@ def add_compatibility_columns(frame):
         "v6_early_bird": False,
         "v6_stability_window": 0,
         "v6_stability_threshold": float("nan"),
+        "v7_dense_warmup_epochs": 0,
+        "v7_dense_correction_steps": 0,
+        "v7_layer_keep_ratios": "null",
+        "v7_early_bird_min_events": 0,
+        "v7_early_bird_min_steps": 0,
         "run_id": "",
         "timing_detail": "historical",
         "record_batch_metrics": True,
+        "training_phase": "unknown",
+        "child_val_loss": float("nan"),
+        "child_val_accuracy": float("nan"),
     }
     for column, default in defaults.items():
         if column not in frame.columns:
@@ -66,6 +74,11 @@ def main():
         "v6_early_bird",
         "v6_stability_window",
         "v6_stability_threshold",
+        "v7_dense_warmup_epochs",
+        "v7_dense_correction_steps",
+        "v7_layer_keep_ratios",
+        "v7_early_bird_min_events",
+        "v7_early_bird_min_steps",
         "timing_detail",
         "record_batch_metrics",
         "seed",
@@ -78,10 +91,55 @@ def main():
     selected_epoch = epochs.loc[best_indices].copy()
     selected_epoch = selected_epoch.rename(columns={"epoch": "best_epoch"})
 
+    final_indices = epochs.groupby(run_keys, dropna=False)["epoch"].idxmax()
+    final_epoch = epochs.loc[
+        final_indices,
+        run_keys + [
+            "epoch", "train_loss", "train_accuracy", "val_loss", "val_accuracy",
+            "child_val_loss", "child_val_accuracy",
+        ],
+    ].copy()
+    final_epoch = final_epoch.rename(columns={
+        "epoch": "final_epoch",
+        "train_loss": "final_train_loss",
+        "train_accuracy": "final_train_accuracy",
+        "val_loss": "final_val_loss",
+        "val_accuracy": "final_val_accuracy",
+        "child_val_loss": "final_child_val_loss",
+        "child_val_accuracy": "final_child_val_accuracy",
+    })
+
+    child_epochs = epochs.dropna(subset=["child_val_loss"])
+    if child_epochs.empty:
+        best_child_epoch = None
+    else:
+        child_best_indices = child_epochs.groupby(run_keys, dropna=False)["child_val_loss"].idxmin()
+        best_child_epoch = child_epochs.loc[
+            child_best_indices,
+            run_keys + ["epoch", "child_val_loss", "child_val_accuracy"],
+        ].copy().rename(columns={
+            "epoch": "best_child_epoch",
+            "child_val_loss": "best_child_val_loss",
+            "child_val_accuracy": "best_child_val_accuracy",
+        })
+
+    epochs["dense_warmup_time_s"] = epochs["epoch_time_s"].where(
+        epochs["training_phase"] == "dense_warmup", 0.0
+    )
+    epochs["sparse_hybrid_time_s"] = epochs["epoch_time_s"].where(
+        epochs["training_phase"] == "sparse_or_hybrid", 0.0
+    )
+    epochs["dense_warmup_epoch"] = (epochs["training_phase"] == "dense_warmup").astype(int)
+    epochs["sparse_hybrid_epoch"] = (epochs["training_phase"] == "sparse_or_hybrid").astype(int)
+
     run_training = epochs.groupby(run_keys, as_index=False, dropna=False).agg(
         epochs_completed=("epoch", "max"),
         total_training_time_s=("epoch_time_s", "sum"),
         mean_epoch_time_s=("epoch_time_s", "mean"),
+        dense_warmup_time_s=("dense_warmup_time_s", "sum"),
+        sparse_hybrid_time_s=("sparse_hybrid_time_s", "sum"),
+        dense_warmup_epochs=("dense_warmup_epoch", "sum"),
+        sparse_hybrid_epochs=("sparse_hybrid_epoch", "sum"),
     )
     batch_aggs = {
         "mean_forward_ms": ("forward_time_s", lambda values: values.mean() * 1000.0),
@@ -107,6 +165,10 @@ def main():
         if "selector_scoring_time_s" in batches.columns:
             batch_aggs["selector_scoring_time_s"] = ("selector_scoring_time_s", "sum")
         batch_aggs["child_rebuild_time_s"] = ("child_rebuild_time_s", "sum")
+    if "dense_correction_event" in batches.columns:
+        batch_aggs["dense_correction_events"] = ("dense_correction_event", "sum")
+    if "dense_warmup_event" in batches.columns:
+        batch_aggs["dense_warmup_batches"] = ("dense_warmup_event", "sum")
     if "topology_frozen" in batches.columns:
         batch_aggs["topology_frozen"] = ("topology_frozen", "max")
         batch_aggs["topology_freeze_step"] = ("topology_freeze_step", "max")
@@ -117,7 +179,14 @@ def main():
         batch_aggs["effective_keep_ratio_min"] = ("effective_keep_ratio", "min")
         batch_aggs["effective_keep_ratio_max"] = ("effective_keep_ratio", "max")
     per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(**batch_aggs)
-    per_run = selected_epoch.merge(run_training, on=run_keys, how="inner").merge(per_run_batches, on=run_keys, how="inner")
+    per_run = (
+        selected_epoch
+        .merge(final_epoch, on=run_keys, how="inner")
+        .merge(run_training, on=run_keys, how="inner")
+        .merge(per_run_batches, on=run_keys, how="inner")
+    )
+    if best_child_epoch is not None:
+        per_run = per_run.merge(best_child_epoch, on=run_keys, how="left")
 
     summary = per_run.groupby(experiment_keys, as_index=False, dropna=False).agg(
         runs=("seed", "count"),
@@ -125,6 +194,16 @@ def main():
         val_accuracy_std=("val_accuracy", "std"),
         train_accuracy_mean=("train_accuracy", "mean"),
         train_accuracy_std=("train_accuracy", "std"),
+        final_val_accuracy_mean=("final_val_accuracy", "mean"),
+        final_val_accuracy_std=("final_val_accuracy", "std"),
+        final_train_accuracy_mean=("final_train_accuracy", "mean"),
+        final_train_accuracy_std=("final_train_accuracy", "std"),
+        final_child_val_accuracy_mean=("final_child_val_accuracy", "mean"),
+        final_child_val_accuracy_std=("final_child_val_accuracy", "std"),
+        **({
+            "child_val_accuracy_mean": ("child_val_accuracy", "mean"),
+            "child_val_accuracy_std": ("child_val_accuracy", "std"),
+        } if "child_val_accuracy" in per_run.columns else {}),
         forward_ms_mean=("mean_forward_ms", "mean"),
         forward_ms_std=("mean_forward_ms", "std"),
         backward_ms_mean=("mean_backward_ms", "mean"),
@@ -139,6 +218,15 @@ def main():
         epochs_completed_std=("epochs_completed", "std"),
         total_training_time_mean=("total_training_time_s", "mean"),
         total_training_time_std=("total_training_time_s", "std"),
+        dense_warmup_time_mean=("dense_warmup_time_s", "mean"),
+        sparse_hybrid_time_mean=("sparse_hybrid_time_s", "mean"),
+        dense_warmup_epochs_mean=("dense_warmup_epochs", "mean"),
+        sparse_hybrid_epochs_mean=("sparse_hybrid_epochs", "mean"),
+        **({
+            "best_child_val_accuracy_mean": ("best_child_val_accuracy", "mean"),
+            "best_child_val_accuracy_std": ("best_child_val_accuracy", "std"),
+            "best_child_epoch_mean": ("best_child_epoch", "mean"),
+        } if "best_child_val_accuracy" in per_run.columns else {}),
         **{
             output_name: (per_run_name, statistic)
             for column in timing_columns
@@ -156,6 +244,14 @@ def main():
             **({"selector_scoring_time_mean": ("selector_scoring_time_s", "mean")} if "selector_scoring_time_s" in per_run.columns else {}),
             "child_rebuild_time_mean": ("child_rebuild_time_s", "mean"),
         } if "gradient_scoring_events" in per_run.columns else {}),
+        **({
+            "dense_correction_events_mean": ("dense_correction_events", "mean"),
+            "dense_correction_events_std": ("dense_correction_events", "std"),
+        } if "dense_correction_events" in per_run.columns else {}),
+        **({
+            "dense_warmup_batches_mean": ("dense_warmup_batches", "mean"),
+            "dense_warmup_batches_std": ("dense_warmup_batches", "std"),
+        } if "dense_warmup_batches" in per_run.columns else {}),
         **({
             "effective_keep_ratio_mean": ("effective_keep_ratio_mean", "mean"),
             "effective_keep_ratio_min": ("effective_keep_ratio_min", "mean"),

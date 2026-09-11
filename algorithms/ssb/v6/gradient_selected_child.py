@@ -97,7 +97,7 @@ def gradient_retention_indices(scores: torch.Tensor, retention: float) -> torch.
 
 
 class GradientSelectedChildModelV6(StructuredChildModelV5):
-    """V5-style child whose hidden structured units are selected by dense gradients."""
+    """V5-style child whose hidden structured units are selected by importance scores."""
 
     is_v6_gradient_selected = True
 
@@ -119,8 +119,10 @@ class GradientSelectedChildModelV6(StructuredChildModelV5):
             raise ValueError("selection_mode must be 'fixed' or 'gradient_retention'.")
         if not 0 < gradient_retention <= 1:
             raise ValueError("gradient_retention must be in (0, 1].")
-        if selection_method not in {"gradient_l2", "weight_l2", "taylor"}:
-            raise ValueError("selection_method must be gradient_l2, weight_l2, or taylor.")
+        if selection_method not in {"random", "gradient_l2", "weight_l2", "taylor"}:
+            raise ValueError(
+                "selection_method must be random, gradient_l2, weight_l2, or taylor."
+            )
         if stability_window < 1:
             raise ValueError("stability_window must be >= 1.")
         if not 0 <= stability_threshold <= 1:
@@ -167,6 +169,14 @@ class GradientSelectedChildModelV6(StructuredChildModelV5):
         importance = {}
         for module in self.master.modules():
             if isinstance(module, (nn.Linear, nn.Conv2d)):
+                if self.selection_method == "random":
+                    total = (
+                        module.out_features
+                        if isinstance(module, nn.Linear)
+                        else module.out_channels
+                    )
+                    importance[module] = torch.rand(total, device=module.weight.device)
+                    continue
                 if self.selection_method == "weight_l2":
                     importance[module] = structured_weight_l2(module.weight)
                     continue
@@ -206,7 +216,7 @@ class GradientSelectedChildModelV6(StructuredChildModelV5):
             self.topology_freeze_scoring_event = self.scoring_event_count + 1
 
     def score_and_refresh(self, x, y, criterion, optimizer, learning_rate: float):
-        """Run a dense scoring backward and rebuild a gradient-ranked child."""
+        """Score structured units and rebuild the selected child when due."""
         if not self.scoring_due():
             return optimizer, False
 
@@ -219,7 +229,7 @@ class GradientSelectedChildModelV6(StructuredChildModelV5):
         scoring_start = time.perf_counter()
         dense_scoring_elapsed = 0.0
         self.master.zero_grad(set_to_none=True)
-        if self.selection_method != "weight_l2":
+        if self.selection_method not in {"random", "weight_l2"}:
             dense_start = time.perf_counter()
             dense_loss = criterion(self.master(x), y)
             dense_loss.backward()

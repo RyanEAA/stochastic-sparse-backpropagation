@@ -46,7 +46,11 @@ def make_run_id(config):
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
 
 
-def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rate, global_step_start=0, detailed_timing=False, record_batch_metrics=False):
+def train_epoch(
+    model, loader, optimizer, criterion, device, epoch, learning_rate,
+    global_step_start=0, detailed_timing=False, record_batch_metrics=False,
+    master_training=False,
+):
     model.train()
     loss_sum = correct = total = 0
     batches = []
@@ -76,11 +80,24 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
             else ""
         )
         scoring_event = False
+        dense_correction_event = bool(
+            not master_training
+            and hasattr(model, "dense_correction_due")
+            and model.dense_correction_due()
+        )
         selection_refresh_time_s = 0.0
         selector_scoring_time_s = 0.0
         dense_scoring_time_s = 0.0
         child_rebuild_time_s = 0.0
-        if getattr(model, "is_v6_gradient_selected", False):
+        if dense_correction_event:
+            if detailed_timing:
+                synchronize(device)
+            selection_start = time.perf_counter()
+            optimizer = model.prepare_dense_correction(optimizer, learning_rate)
+            if detailed_timing:
+                synchronize(device)
+            selection_refresh_time_s = time.perf_counter() - selection_start if detailed_timing else 0.0
+        elif getattr(model, "is_v6_gradient_selected", False) and not master_training:
             if detailed_timing:
                 synchronize(device)
             selection_start = time.perf_counter()
@@ -103,7 +120,7 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         zero_grad_time_s = time.perf_counter() - zero_grad_start if detailed_timing else 0.0
         synchronize(device)
         forward_start = time.perf_counter()
-        output = model(x)
+        output = model.master(x) if (master_training or dense_correction_event) else model(x)
         synchronize(device)
         forward_time = time.perf_counter() - forward_start
         loss_start = time.perf_counter()
@@ -133,7 +150,14 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
         if detailed_timing:
             synchronize(device)
         post_step_start = time.perf_counter()
-        if getattr(model, "is_v5_structured_child", False):
+        if dense_correction_event:
+            scoring_event = not model.topology_frozen
+            optimizer = model.finish_dense_correction(optimizer, learning_rate)
+            selector_scoring_time_s = model.last_selector_scoring_time_s
+            child_rebuild_time_s = model.last_child_rebuild_time_s
+        elif master_training:
+            pass
+        elif getattr(model, "is_v5_structured_child", False):
             optimizer = model.after_optimizer_step(optimizer, learning_rate)
         elif hasattr(model, "after_optimizer_step") and model.after_optimizer_step():
             # V4 creates a new physically smaller child; its Parameters are new objects.
@@ -196,6 +220,8 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
                 child_topology_before=topology_before,
                 child_topology_after=topology_after,
                 gradient_scoring_event=int(scoring_event),
+                dense_correction_event=int(dense_correction_event),
+                dense_warmup_event=int(master_training),
                 gradient_scoring_event_count=int(getattr(model, "scoring_event_count", 0)),
                 selector_scoring_time_s=selector_scoring_time_s,
                 dense_scoring_time_s=dense_scoring_time_s,
@@ -230,16 +256,23 @@ def train_epoch(model, loader, optimizer, criterion, device, epoch, learning_rat
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device):
-    if hasattr(model, "sync_child_to_master"):
-        model.sync_child_to_master()
-    model.eval()
+def evaluate(model, loader, criterion, device, target="default"):
+    if target == "child":
+        if getattr(model, "child", None) is None:
+            raise RuntimeError("Cannot evaluate an uninitialized structured child.")
+        evaluation_model = model.child
+        evaluation_model.eval()
+    else:
+        if target != "master_no_sync" and hasattr(model, "sync_child_to_master"):
+            model.sync_child_to_master()
+        model.eval()
+        evaluation_model = model
     loss_sum = correct = total = 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         synchronize(device)
         forward_start = time.perf_counter()
-        output = model(x)
+        output = evaluation_model(x)
         synchronize(device)
         forward_time = time.perf_counter() - forward_start
         loss = criterion(output, y)
@@ -261,10 +294,15 @@ def main():
     parser.add_argument("--score-refresh-steps", type=int, default=100, help="For V6: run dense gradient scoring and rebuild the top-k child every N optimizer steps.")
     parser.add_argument("--v6-selection-mode", choices=["fixed", "gradient_retention"], default="fixed")
     parser.add_argument("--v6-gradient-retention", type=float, default=0.90, help="For dynamic V6: smallest child retaining this fraction of per-layer squared gradient energy.")
-    parser.add_argument("--v6-selection-method", choices=["gradient_l2", "weight_l2", "taylor"], default="gradient_l2", help="Structured-unit score used by V6.")
+    parser.add_argument("--v6-selection-method", choices=["random", "gradient_l2", "weight_l2", "taylor"], default="gradient_l2", help="Structured-unit score used by V6/V7; random is a matched selector control.")
     parser.add_argument("--v6-early-bird", action="store_true", help="Freeze the V6 topology once recent mask distances are stable.")
     parser.add_argument("--v6-stability-window", type=int, default=5, help="Number of consecutive mask distances used by Early-Bird.")
     parser.add_argument("--v6-stability-threshold", type=float, default=0.10, help="Maximum mask replacement fraction considered stable.")
+    parser.add_argument("--v7-dense-warmup-epochs", type=int, default=0, help="For V7: train the full master for this many initial epochs.")
+    parser.add_argument("--v7-dense-correction-steps", type=int, default=0, help="For V7: replace one batch with a dense update after this many sparse updates; 0 disables corrections.")
+    parser.add_argument("--v7-layer-keep-ratios", nargs="+", type=float, default=None, help="For V7 fixed selection: one keep ratio per hidden conv/linear layer, in forward order.")
+    parser.add_argument("--v7-early-bird-min-events", type=int, default=0, help="Do not freeze a V7 mask before this many scoring events.")
+    parser.add_argument("--v7-early-bird-min-steps", type=int, default=0, help="Do not freeze a V7 mask before this many sparse-phase optimizer steps.")
     parser.add_argument("--timing-detail", choices=["basic", "full"], default="basic", help="Full adds synchronized per-stage profiling; basic minimizes benchmark overhead.")
     parser.add_argument("--record-batch-metrics", action="store_true", help="Record per-batch accuracy; disabled by default to avoid a device synchronization every batch.")
     parser.add_argument("--epochs", type=int, default=3, help="Fixed epoch count when --stop-at-convergence is not used.")
@@ -299,6 +337,24 @@ def main():
         raise ValueError("v6_stability_window must be >= 1.")
     if not 0 <= args.v6_stability_threshold <= 1:
         raise ValueError("v6_stability_threshold must be in [0, 1].")
+    if args.v7_dense_warmup_epochs < 0:
+        raise ValueError("v7_dense_warmup_epochs must be >= 0.")
+    if args.v7_dense_correction_steps < 0:
+        raise ValueError("v7_dense_correction_steps must be >= 0.")
+    if args.v7_early_bird_min_events < 0 or args.v7_early_bird_min_steps < 0:
+        raise ValueError("V7 Early-Bird minimums must be >= 0.")
+    if args.v7_layer_keep_ratios and any(
+        ratio <= 0 or ratio > 1 for ratio in args.v7_layer_keep_ratios
+    ):
+        raise ValueError("v7_layer_keep_ratios must all be in (0, 1].")
+    if args.model != "ssb-v7" and (
+        args.v7_dense_warmup_epochs
+        or args.v7_dense_correction_steps
+        or args.v7_layer_keep_ratios is not None
+        or args.v7_early_bird_min_events
+        or args.v7_early_bird_min_steps
+    ):
+        raise ValueError("V7 hybrid options require --model ssb-v7.")
     if args.stop_at_convergence and args.max_epochs < 1:
         raise ValueError("max_epochs must be >= 1.")
     if args.stop_at_convergence and args.patience < 1:
@@ -325,6 +381,10 @@ def main():
         v6_early_bird=args.v6_early_bird,
         v6_stability_window=args.v6_stability_window,
         v6_stability_threshold=args.v6_stability_threshold,
+        v7_dense_correction_steps=args.v7_dense_correction_steps,
+        v7_layer_keep_ratios=args.v7_layer_keep_ratios,
+        v7_early_bird_min_events=args.v7_early_bird_min_events,
+        v7_early_bird_min_steps=args.v7_early_bird_min_steps,
     )
     initialize_model_parameters(model, args.seed)
     model = model.to(device)
@@ -333,7 +393,9 @@ def main():
         model.refresh_child()
 
     optimizer_parameters = model.training_parameters() if hasattr(model, "training_parameters") else model.parameters()
-    if getattr(model, "is_v5_structured_child", False):
+    if args.model == "ssb-v7" and args.v7_dense_warmup_epochs > 0:
+        optimizer = model.make_master_optimizer(args.lr)
+    elif getattr(model, "is_v5_structured_child", False):
         optimizer = model.make_optimizer(args.lr)
     else:
         optimizer = optim.Adam(optimizer_parameters, lr=args.lr)
@@ -354,6 +416,11 @@ def main():
         "v6_early_bird": bool(args.v6_early_bird) if args.model in {"ssb-v6", "ssb-v7"} else False,
         "v6_stability_window": args.v6_stability_window if args.model in {"ssb-v6", "ssb-v7"} else 0,
         "v6_stability_threshold": args.v6_stability_threshold if args.model in {"ssb-v6", "ssb-v7"} else None,
+        "v7_dense_warmup_epochs": args.v7_dense_warmup_epochs if args.model == "ssb-v7" else 0,
+        "v7_dense_correction_steps": args.v7_dense_correction_steps if args.model == "ssb-v7" else 0,
+        "v7_layer_keep_ratios": args.v7_layer_keep_ratios if args.model == "ssb-v7" else None,
+        "v7_early_bird_min_events": args.v7_early_bird_min_events if args.model == "ssb-v7" else 0,
+        "v7_early_bird_min_steps": args.v7_early_bird_min_steps if args.model == "ssb-v7" else 0,
         "seed": args.seed,
         "protocol_version": args.protocol_version,
         "batch_size": args.batch_size,
@@ -435,6 +502,11 @@ def main():
         "v6_early_bird": identity["v6_early_bird"],
         "v6_stability_window": identity["v6_stability_window"],
         "v6_stability_threshold": identity["v6_stability_threshold"],
+        "v7_dense_warmup_epochs": identity["v7_dense_warmup_epochs"],
+        "v7_dense_correction_steps": identity["v7_dense_correction_steps"],
+        "v7_layer_keep_ratios": json.dumps(identity["v7_layer_keep_ratios"]),
+        "v7_early_bird_min_events": identity["v7_early_bird_min_events"],
+        "v7_early_bird_min_steps": identity["v7_early_bird_min_steps"],
         "seed": args.seed,
         "timing_detail": args.timing_detail,
         "record_batch_metrics": bool(args.record_batch_metrics),
@@ -448,12 +520,34 @@ def main():
     training_wall_start = time.perf_counter()
 
     for epoch in range(1, epoch_limit + 1):
+        master_training = bool(
+            args.model == "ssb-v7" and epoch <= args.v7_dense_warmup_epochs
+        )
+        if (
+            args.model == "ssb-v7"
+            and args.v7_dense_warmup_epochs > 0
+            and epoch == args.v7_dense_warmup_epochs + 1
+        ):
+            model.prepare_sparse_after_warmup(optimizer)
+            optimizer = None
         train_loss, train_accuracy, epoch_time, batches, optimizer, global_step = train_epoch(
             model, train_loader, optimizer, criterion, device, epoch, args.lr, global_step,
             detailed_timing=args.timing_detail == "full",
             record_batch_metrics=args.record_batch_metrics,
+            master_training=master_training,
         )
-        val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+        child_val_loss = child_val_accuracy = float("nan")
+        if args.model == "ssb-v7" and not master_training:
+            child_val_loss, child_val_accuracy = evaluate(
+                model, val_loader, criterion, device, target="child"
+            )
+        val_loss, val_accuracy = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            target="master_no_sync" if master_training else "default",
+        )
 
         improved = val_loss < (best_val_loss - args.min_delta)
         if improved:
@@ -466,16 +560,20 @@ def main():
         print(
             f"Epoch {epoch}: train_loss={train_loss:.4f} train_acc={train_accuracy:.4f} "
             f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f} time={epoch_time:.2f}s "
+            f"child_val_acc={child_val_accuracy:.4f} "
             f"best_epoch={best_epoch} no_improve={epochs_without_improvement}"
         )
         epoch_rows.append(
             {
                 **csv_base,
                 "epoch": epoch,
+                "training_phase": "dense_warmup" if master_training else "sparse_or_hybrid",
                 "train_loss": train_loss,
                 "train_accuracy": train_accuracy,
                 "val_loss": val_loss,
                 "val_accuracy": val_accuracy,
+                "child_val_loss": child_val_loss,
+                "child_val_accuracy": child_val_accuracy,
                 "epoch_time_s": epoch_time,
                 "is_best_val_loss": int(improved),
                 "best_epoch_so_far": best_epoch,
@@ -509,6 +607,7 @@ def main():
         "topology_frozen": bool(getattr(model, "topology_frozen", False)),
         "topology_freeze_step": int(getattr(model, "topology_freeze_step", 0)),
         "topology_freeze_scoring_event": int(getattr(model, "topology_freeze_scoring_event", 0)),
+        "dense_correction_count": int(getattr(model, "dense_correction_count", 0)),
     })
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
 
@@ -528,6 +627,11 @@ def main():
         "v6_early_bird",
         "v6_stability_window",
         "v6_stability_threshold",
+        "v7_dense_warmup_epochs",
+        "v7_dense_correction_steps",
+        "v7_layer_keep_ratios",
+        "v7_early_bird_min_events",
+        "v7_early_bird_min_steps",
         "seed",
         "timing_detail",
         "record_batch_metrics",
@@ -536,12 +640,12 @@ def main():
         args.output_dir / "epochs.csv",
         epoch_rows,
         common_fields
-        + ["epoch", "train_loss", "train_accuracy", "val_loss", "val_accuracy", "epoch_time_s", "is_best_val_loss", "best_epoch_so_far", "epochs_without_improvement"],
+        + ["epoch", "training_phase", "train_loss", "train_accuracy", "val_loss", "val_accuracy", "child_val_loss", "child_val_accuracy", "epoch_time_s", "is_best_val_loss", "best_epoch_so_far", "epochs_without_improvement"],
     )
     write_csv(
         args.output_dir / "batches.csv",
         batch_rows,
-        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "detailed_timing", "data_transfer_time_s", "selection_refresh_time_s", "zero_grad_time_s", "loss_time_s", "memory_measurement_time_s", "optimizer_step_time_s", "post_step_time_s", "instrumentation_time_s", "batch_wall_time_s", "unaccounted_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "gradient_scoring_event_count", "selector_scoring_time_s", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max", "mask_distance", "topology_frozen", "topology_freeze_step", "topology_freeze_scoring_event"],
+        common_fields + ["epoch", "batch", "global_step", "forward_time_s", "backward_time_s", "detailed_timing", "data_transfer_time_s", "selection_refresh_time_s", "zero_grad_time_s", "loss_time_s", "memory_measurement_time_s", "optimizer_step_time_s", "post_step_time_s", "instrumentation_time_s", "batch_wall_time_s", "unaccounted_time_s", "memory_bytes", "batch_accuracy", "child_refreshed", "child_refresh_count", "child_topology_before", "child_topology_after", "gradient_scoring_event", "dense_correction_event", "dense_warmup_event", "gradient_scoring_event_count", "selector_scoring_time_s", "dense_scoring_time_s", "child_rebuild_time_s", "active_structured_units", "total_structured_units", "effective_keep_ratio", "importance_min", "importance_mean", "importance_max", "mask_distance", "topology_frozen", "topology_freeze_step", "topology_freeze_scoring_event"],
     )
 
 
