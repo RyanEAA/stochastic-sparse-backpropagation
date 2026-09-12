@@ -12,6 +12,9 @@ def config_label(row):
         return "dense"
 
     parts = [model]
+    hybrid = row.get("v7_hybrid_config", None)
+    if pd.notna(hybrid) and str(hybrid) not in {"", "none"}:
+        parts.append(str(hybrid).replace("_", "-"))
     keep = row.get("keep_ratio", None)
     if pd.notna(keep):
         parts.append(f"k={float(keep):g}")
@@ -44,6 +47,10 @@ def config_label(row):
     if pd.notna(layer_ratios) and str(layer_ratios) not in {"", "null", "None"}:
         compact = str(layer_ratios).replace(" ", "")
         parts.append(f"layers={compact}")
+
+    target = row.get("v7_target_parameter_ratio", None)
+    if pd.notna(target):
+        parts.append(f"param-budget={float(target):g}")
 
     return "\n".join(parts)
 
@@ -91,6 +98,8 @@ def main():
         "v7_dense_warmup_epochs": 0,
         "v7_dense_correction_steps": 0,
         "v7_layer_keep_ratios": "null",
+        "v7_target_parameter_ratio": float("nan"),
+        "v7_hybrid_config": "none",
     }
     for column, default in defaults.items():
         if column not in df.columns:

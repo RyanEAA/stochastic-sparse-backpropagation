@@ -31,6 +31,8 @@ timers add overhead. Normal experiments default to low-overhead timing and defer
 training loss/accuracy conversion to the end of each epoch.
 
 See `V7_EXPERIMENT.md` for diagnostic and multi-dataset commands.
+For the audited true-parameter-budget, convergence, and Minsky workflow, see
+`SSB_V7_CONVERGENCE_STUDY.md`.
 
 ### V6 Stage 2
 

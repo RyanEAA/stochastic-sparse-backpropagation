@@ -184,12 +184,40 @@ def check_v5_master_optimizer_state(dataset, architecture, num_classes):
         f"master optimizer state persisted across child refresh"
     )
 
+
+def check_v7_parameter_budget_and_step(dataset="cifar10"):
+    model = build_model(
+        dataset, "ssb-v7", keep_ratio=0.2, architecture="cnn",
+        score_refresh_steps=25, v6_selection_method="weight_l2",
+        v7_layer_keep_ratios=[1.0, 0.5, 0.2],
+        v7_target_parameter_ratio=0.20,
+    )
+    initialize_model_parameters(model, seed=1)
+    model.refresh_child()
+    ratio = model.effective_parameter_ratio()
+    assert abs(ratio - 0.20) < 0.001
+    optimizer = model.make_optimizer(1e-3)
+    x = torch.randn(4, 3, 32, 32)
+    y = torch.randint(0, 10, (4,))
+    optimizer, scored = model.score_and_refresh(
+        x, y, nn.CrossEntropyLoss(), optimizer, 1e-3
+    )
+    optimizer.zero_grad(set_to_none=True)
+    loss = nn.CrossEntropyLoss()(model(x), y)
+    loss.backward()
+    optimizer.step()
+    model.after_optimizer_step(optimizer, 1e-3)
+    assert scored and torch.isfinite(loss)
+    print(f"PASS cifar10 cnn ssb-v7: true child/master parameter ratio={ratio:.6f}")
+
 def main():
     expected = ("ssb-v0", "ssb-v1", "ssb-v2", "ssb-v3", "ssb-v1-block", "ssb-v2-block", "ssb-v3-block")
     assert tuple(SSB_LAYERS) == expected
     assert all(name in AVAILABLE_MODELS for name in expected)
     assert "ssb-v4" in AVAILABLE_MODELS
     assert "ssb-v5" in AVAILABLE_MODELS
+    assert "ssb-v6" in AVAILABLE_MODELS
+    assert "ssb-v7" in AVAILABLE_MODELS
 
     torch.manual_seed(10)
     x = torch.randn(4, 7)
@@ -215,7 +243,9 @@ def main():
         check_v4_structured_child("cifar10", architecture, 10)
         check_v5_master_optimizer_state("cifar10", architecture, 10)
 
-    print("PASS registry, V0/V1/V2 compatibility, V3/V3-block semantics, V4/V5 structured-child mechanics, V5 persistent Adam state, block structure, CNN/MLP wiring, and initialization parity")
+    check_v7_parameter_budget_and_step()
+
+    print("PASS registry, V0/V1/V2 compatibility, V3/V3-block semantics, V4/V5 mechanics, V7 true parameter budget, block structure, CNN/MLP wiring, and initialization parity")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ def build_model(
     v6_stability_threshold: float = 0.10,
     v7_dense_correction_steps: int = 0,
     v7_layer_keep_ratios=None,
+    v7_target_parameter_ratio=None,
     v7_early_bird_min_events: int = 0,
     v7_early_bird_min_steps: int = 0,
 ):
@@ -81,6 +82,7 @@ def build_model(
                 **({
                     "dense_correction_steps": v7_dense_correction_steps,
                     "layer_keep_ratios": v7_layer_keep_ratios,
+                    "target_parameter_ratio": v7_target_parameter_ratio,
                     "early_bird_min_events": v7_early_bird_min_events,
                     "early_bird_min_steps": v7_early_bird_min_steps,
                 } if model == "ssb-v7" else {}),

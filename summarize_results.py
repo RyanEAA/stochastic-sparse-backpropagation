@@ -20,6 +20,10 @@ def add_compatibility_columns(frame):
         "v7_dense_warmup_epochs": 0,
         "v7_dense_correction_steps": 0,
         "v7_layer_keep_ratios": "null",
+        "v7_target_parameter_ratio": float("nan"),
+        "v7_hybrid_config": "none",
+        "validation_fraction": float("nan"),
+        "split_seed": 0,
         "v7_early_bird_min_events": 0,
         "v7_early_bird_min_steps": 0,
         "run_id": "",
@@ -28,6 +32,10 @@ def add_compatibility_columns(frame):
         "training_phase": "unknown",
         "child_val_loss": float("nan"),
         "child_val_accuracy": float("nan"),
+        "final_test_loss": float("nan"),
+        "final_test_accuracy": float("nan"),
+        "final_child_test_loss": float("nan"),
+        "final_child_test_accuracy": float("nan"),
     }
     for column, default in defaults.items():
         if column not in frame.columns:
@@ -77,10 +85,14 @@ def main():
         "v7_dense_warmup_epochs",
         "v7_dense_correction_steps",
         "v7_layer_keep_ratios",
+        "v7_target_parameter_ratio",
+        "v7_hybrid_config",
         "v7_early_bird_min_events",
         "v7_early_bird_min_steps",
         "timing_detail",
         "record_batch_metrics",
+        "validation_fraction",
+        "split_seed",
         "seed",
     ]
     experiment_keys = run_keys[:-1]
@@ -91,12 +103,22 @@ def main():
     selected_epoch = epochs.loc[best_indices].copy()
     selected_epoch = selected_epoch.rename(columns={"epoch": "best_epoch"})
 
+    best_accuracy_indices = epochs.groupby(run_keys, dropna=False)["val_accuracy"].idxmax()
+    best_accuracy_epoch = epochs.loc[
+        best_accuracy_indices, run_keys + ["epoch", "val_accuracy"]
+    ].copy().rename(columns={
+        "epoch": "best_val_accuracy_epoch",
+        "val_accuracy": "best_val_accuracy",
+    })
+
     final_indices = epochs.groupby(run_keys, dropna=False)["epoch"].idxmax()
     final_epoch = epochs.loc[
         final_indices,
         run_keys + [
             "epoch", "train_loss", "train_accuracy", "val_loss", "val_accuracy",
             "child_val_loss", "child_val_accuracy",
+            "final_test_loss", "final_test_accuracy",
+            "final_child_test_loss", "final_child_test_accuracy",
         ],
     ].copy()
     final_epoch = final_epoch.rename(columns={
@@ -113,7 +135,7 @@ def main():
     if child_epochs.empty:
         best_child_epoch = None
     else:
-        child_best_indices = child_epochs.groupby(run_keys, dropna=False)["child_val_loss"].idxmin()
+        child_best_indices = child_epochs.groupby(run_keys, dropna=False)["child_val_accuracy"].idxmax()
         best_child_epoch = child_epochs.loc[
             child_best_indices,
             run_keys + ["epoch", "child_val_loss", "child_val_accuracy"],
@@ -145,6 +167,7 @@ def main():
         "mean_forward_ms": ("forward_time_s", lambda values: values.mean() * 1000.0),
         "mean_backward_ms": ("backward_time_s", lambda values: values.mean() * 1000.0),
         "mean_memory_mb": ("memory_bytes", lambda values: values.mean() / (1024 ** 2)),
+        "peak_memory_mb": ("memory_bytes", lambda values: values.max() / (1024 ** 2)),
     }
     timing_columns = [
         "data_transfer_time_s", "selection_refresh_time_s", "zero_grad_time_s",
@@ -178,15 +201,23 @@ def main():
         batch_aggs["effective_keep_ratio_mean"] = ("effective_keep_ratio", "mean")
         batch_aggs["effective_keep_ratio_min"] = ("effective_keep_ratio", "min")
         batch_aggs["effective_keep_ratio_max"] = ("effective_keep_ratio", "max")
+    if "effective_parameter_ratio" in batches.columns:
+        batch_aggs["effective_parameter_ratio_mean"] = ("effective_parameter_ratio", "mean")
+        batch_aggs["effective_parameter_ratio_min"] = ("effective_parameter_ratio", "min")
+        batch_aggs["effective_parameter_ratio_max"] = ("effective_parameter_ratio", "max")
     per_run_batches = batches.groupby(run_keys, as_index=False, dropna=False).agg(**batch_aggs)
     per_run = (
         selected_epoch
         .merge(final_epoch, on=run_keys, how="inner")
+        .merge(best_accuracy_epoch, on=run_keys, how="inner")
         .merge(run_training, on=run_keys, how="inner")
         .merge(per_run_batches, on=run_keys, how="inner")
     )
     if best_child_epoch is not None:
         per_run = per_run.merge(best_child_epoch, on=run_keys, how="left")
+    per_run["final_generalization_gap"] = (
+        per_run["final_train_accuracy"] - per_run["final_val_accuracy"]
+    )
 
     summary = per_run.groupby(experiment_keys, as_index=False, dropna=False).agg(
         runs=("seed", "count"),
@@ -198,6 +229,15 @@ def main():
         final_val_accuracy_std=("final_val_accuracy", "std"),
         final_train_accuracy_mean=("final_train_accuracy", "mean"),
         final_train_accuracy_std=("final_train_accuracy", "std"),
+        final_generalization_gap_mean=("final_generalization_gap", "mean"),
+        final_generalization_gap_std=("final_generalization_gap", "std"),
+        best_val_accuracy_mean=("best_val_accuracy", "mean"),
+        best_val_accuracy_std=("best_val_accuracy", "std"),
+        best_val_accuracy_epoch_mean=("best_val_accuracy_epoch", "mean"),
+        final_test_accuracy_mean=("final_test_accuracy", "mean"),
+        final_test_accuracy_std=("final_test_accuracy", "std"),
+        final_child_test_accuracy_mean=("final_child_test_accuracy", "mean"),
+        final_child_test_accuracy_std=("final_child_test_accuracy", "std"),
         final_child_val_accuracy_mean=("final_child_val_accuracy", "mean"),
         final_child_val_accuracy_std=("final_child_val_accuracy", "std"),
         **({
@@ -210,6 +250,8 @@ def main():
         backward_ms_std=("mean_backward_ms", "std"),
         memory_mb_mean=("mean_memory_mb", "mean"),
         memory_mb_std=("mean_memory_mb", "std"),
+        peak_memory_mb_mean=("peak_memory_mb", "mean"),
+        peak_memory_mb_std=("peak_memory_mb", "std"),
         epoch_time_mean=("mean_epoch_time_s", "mean"),
         epoch_time_std=("mean_epoch_time_s", "std"),
         best_epoch_mean=("best_epoch", "mean"),
@@ -257,6 +299,11 @@ def main():
             "effective_keep_ratio_min": ("effective_keep_ratio_min", "mean"),
             "effective_keep_ratio_max": ("effective_keep_ratio_max", "mean"),
         } if "effective_keep_ratio_mean" in per_run.columns else {}),
+        **({
+            "effective_parameter_ratio_mean": ("effective_parameter_ratio_mean", "mean"),
+            "effective_parameter_ratio_min": ("effective_parameter_ratio_min", "mean"),
+            "effective_parameter_ratio_max": ("effective_parameter_ratio_max", "mean"),
+        } if "effective_parameter_ratio_mean" in per_run.columns else {}),
         **({
             "topology_frozen_fraction": ("topology_frozen", "mean"),
             "topology_freeze_step_mean": ("topology_freeze_step", "mean"),

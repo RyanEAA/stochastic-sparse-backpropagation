@@ -27,6 +27,7 @@ class OptimizedSelectedChildModelV7(GradientSelectedChildModelV6):
         *args,
         dense_correction_steps: int = 0,
         layer_keep_ratios: Sequence[float] | None = None,
+        target_parameter_ratio: float | None = None,
         early_bird_min_events: int = 0,
         early_bird_min_steps: int = 0,
         **kwargs,
@@ -35,17 +36,22 @@ class OptimizedSelectedChildModelV7(GradientSelectedChildModelV6):
             raise ValueError("dense_correction_steps must be >= 0.")
         if early_bird_min_events < 0 or early_bird_min_steps < 0:
             raise ValueError("Early-Bird minimums must be >= 0.")
+        if target_parameter_ratio is not None and not 0 < target_parameter_ratio <= 1:
+            raise ValueError("target_parameter_ratio must be in (0, 1].")
         super().__init__(*args, **kwargs)
         self.dense_correction_steps = int(dense_correction_steps)
         self.early_bird_min_events = int(early_bird_min_events)
         self.early_bird_min_steps = int(early_bird_min_steps)
         self.sparse_steps_since_dense_correction = 0
         self.dense_correction_count = 0
+        self.last_correction_scoring_event = False
 
         hidden_layers = self._hidden_master_layers()
+        self.target_parameter_ratio = (
+            None if target_parameter_ratio is None else float(target_parameter_ratio)
+        )
         if layer_keep_ratios is None:
-            self.layer_keep_ratios = None
-            self._layer_keep_ratio = {}
+            ratios = None
         else:
             ratios = tuple(float(ratio) for ratio in layer_keep_ratios)
             if (
@@ -71,8 +77,81 @@ class OptimizedSelectedChildModelV7(GradientSelectedChildModelV6):
                 )
             if any(ratio <= 0 or ratio > 1 for ratio in ratios):
                 raise ValueError("Every layer keep ratio must be in (0, 1].")
-            self.layer_keep_ratios = ratios
-            self._layer_keep_ratio = dict(zip(hidden_layers, ratios))
+        if self.target_parameter_ratio is not None:
+            profile = ratios or tuple(1.0 for _ in hidden_layers)
+            ratios = self._calibrate_profile_to_parameter_budget(
+                profile, self.target_parameter_ratio
+            )
+        self.layer_keep_ratios = ratios
+        self._layer_keep_ratio = (
+            {} if ratios is None else dict(zip(hidden_layers, ratios))
+        )
+
+    @staticmethod
+    def _kept_units(total: int, ratio: float) -> int:
+        return max(1, min(total, round(total * ratio)))
+
+    def _parameter_count_for_layer_ratios(self, ratios: Sequence[float]) -> int:
+        """Calculate child parameters without allocating candidate child models."""
+        hidden_layers = self._hidden_master_layers()
+        kept = {
+            layer: self._kept_units(
+                layer.out_features if isinstance(layer, nn.Linear) else layer.out_channels,
+                ratio,
+            )
+            for layer, ratio in zip(hidden_layers, ratios)
+        }
+        count = 0
+        if hasattr(self.master, "net"):
+            linears = [m for m in self.master.net if isinstance(m, nn.Linear)]
+            previous = linears[0].in_features
+            for index, layer in enumerate(linears):
+                output = layer.out_features if index == len(linears) - 1 else kept[layer]
+                count += output * previous + (output if layer.bias is not None else 0)
+                previous = output
+            return count
+
+        convs = [m for m in self.master.features.net if isinstance(m, nn.Conv2d)]
+        linears = [m for m in self.master.classifier if isinstance(m, nn.Linear)]
+        previous = convs[0].in_channels
+        for layer in convs:
+            output = kept[layer]
+            kernel = layer.kernel_size[0] * layer.kernel_size[1]
+            count += output * previous * kernel + (output if layer.bias is not None else 0)
+            previous = output
+        spatial_multiplier = linears[0].in_features // convs[-1].out_channels
+        previous *= spatial_multiplier
+        for index, layer in enumerate(linears):
+            output = layer.out_features if index == len(linears) - 1 else kept[layer]
+            count += output * previous + (output if layer.bias is not None else 0)
+            previous = output
+        return count
+
+    def _calibrate_profile_to_parameter_budget(
+        self, profile: Sequence[float], target: float
+    ) -> tuple[float, ...]:
+        """Scale a relative layer profile to the closest realizable parameter ratio."""
+        master_count = self.master_parameter_count()
+
+        def candidate(scale: float):
+            ratios = tuple(min(1.0, scale * value) for value in profile)
+            return ratios, self._parameter_count_for_layer_ratios(ratios) / master_count
+
+        lower, upper = 0.0, max(1.0 / value for value in profile)
+        minimum = candidate(lower)
+        if minimum[1] > target:
+            raise ValueError(
+                f"The smallest structured child uses {minimum[1]:.6f} of master "
+                f"parameters, above requested target {target:.6f}."
+            )
+        for _ in range(80):
+            middle = (lower + upper) / 2.0
+            if candidate(middle)[1] <= target:
+                lower = middle
+            else:
+                upper = middle
+        below, above = candidate(lower), candidate(upper)
+        return min((below, above), key=lambda item: abs(item[1] - target))[0]
 
     def _hidden_master_layers(self):
         if hasattr(self.master, "net"):
@@ -182,7 +261,9 @@ class OptimizedSelectedChildModelV7(GradientSelectedChildModelV6):
         self._copy_optimizer_state_to_master_store(master_optimizer)
         device = next(self.master.parameters()).device
         selector_elapsed = 0.0
-        if not self.topology_frozen:
+        should_score = self.scoring_due()
+        self.last_correction_scoring_event = should_score
+        if should_score:
             _synchronize(device)
             selector_start = time.perf_counter()
             self._score_master()
@@ -196,7 +277,8 @@ class OptimizedSelectedChildModelV7(GradientSelectedChildModelV6):
             self._update_early_bird_state()
             self.scoring_event_count += 1
         else:
-            # Reuse the frozen importance/topology while gathering updated weights.
+            # Reuse the current importance/topology while gathering corrected weights.
+            # A correction can require child reconstruction without changing the mask.
             self.child = None
             _synchronize(device)
             rebuild_start = time.perf_counter()

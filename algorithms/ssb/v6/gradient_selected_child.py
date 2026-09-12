@@ -274,8 +274,14 @@ class GradientSelectedChildModelV6(StructuredChildModelV5):
         )
 
     def effective_keep_ratio(self) -> float:
+        """Legacy structured-unit ratio (not a trainable-parameter ratio)."""
         total = self.total_structured_units()
         return self.active_structured_units() / total if total else 1.0
+
+    def effective_parameter_ratio(self) -> float:
+        """Parameters in the trainable child divided by dense-master parameters."""
+        master = self.master_parameter_count()
+        return self.child_parameter_count() / master if master else 1.0
 
     def importance_statistics(self):
         hidden = []

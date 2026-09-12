@@ -75,6 +75,8 @@ def validate_args(args):
         raise ValueError("--subset must be >= 0")
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
+    if not 0 < args.validation_fraction < 1:
+        raise ValueError("--validation-fraction must be in (0, 1)")
     if any(ratio <= 0 or ratio > 1 for ratio in args.keep_ratios):
         raise ValueError("all --keep-ratios must satisfy 0 < ratio <= 1")
     if any(size < 1 for size in args.block_sizes):
@@ -99,6 +101,8 @@ def validate_args(args):
         raise ValueError("V7 Early-Bird minimums must be >= 0")
     if any(ratio <= 0 or ratio > 1 for ratio in args.v7_layer_keep_ratios):
         raise ValueError("all --v7-layer-keep-ratios must satisfy 0 < ratio <= 1")
+    if args.v7_target_parameter_ratio is not None and not 0 < args.v7_target_parameter_ratio <= 1:
+        raise ValueError("--v7-target-parameter-ratio must be in (0, 1]")
 
 
 def build_jobs(args, datasets):
@@ -158,7 +162,12 @@ def build_jobs(args, datasets):
                             leaf = f"{keep_dir(ratio)}/refresh_{refresh_steps}/seed_{seed:02d}"
                         elif model in {"ssb-v6", "ssb-v7"}:
                             hybrid_dir = f"/hybrid_{hybrid}" if model == "ssb-v7" else ""
-                            leaf = f"selector_{selector}/{keep_dir(ratio)}/score_refresh_{refresh_steps}{hybrid_dir}/seed_{seed:02d}"
+                            budget_dir = (
+                                f"/parameter_budget_{str(args.v7_target_parameter_ratio).replace('.', '_')}"
+                                if model == "ssb-v7" and args.v7_target_parameter_ratio is not None
+                                else ""
+                            )
+                            leaf = f"selector_{selector}/{keep_dir(ratio)}{budget_dir}/score_refresh_{refresh_steps}{hybrid_dir}/seed_{seed:02d}"
                         else:
                             leaf = f"{keep_dir(ratio)}/seed_{seed:02d}"
 
@@ -242,6 +251,7 @@ def main():
     parser.add_argument("--v7-warmup-epochs", type=int, default=1, help="Dense warm-up used by V7 warmup/hybrid configurations.")
     parser.add_argument("--v7-correction-steps", type=int, default=25, help="Sparse updates between dense corrective batches in V7 correction/hybrid configurations.")
     parser.add_argument("--v7-layer-keep-ratios", nargs="+", type=float, default=[1.0, 0.5, 0.2], help="Forward-order hidden-layer ratios for layerwise_hybrid; default matches the current two-conv/one-hidden CNN.")
+    parser.add_argument("--v7-target-parameter-ratio", type=float, default=None, help="Calibrate the V7 layer profile per architecture so the structured child is as close as possible to this child/master parameter ratio.")
     parser.add_argument("--v7-early-bird-min-events", type=int, default=10)
     parser.add_argument("--v7-early-bird-min-steps", type=int, default=0)
     parser.add_argument("--timing-detail", choices=["basic", "full"], default="basic")
@@ -258,6 +268,8 @@ def main():
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--validation-fraction", type=float, default=0.1)
+    parser.add_argument("--split-seed", type=int, default=2026)
     parser.add_argument("--protocol-version", default=PROTOCOL_VERSION)
     parser.add_argument("--experiment-tag", default="")
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -299,6 +311,8 @@ def main():
             "--device", args.device,
             "--data-dir", args.data_dir,
             "--num-workers", str(args.num_workers),
+            "--validation-fraction", str(args.validation_fraction),
+            "--split-seed", str(args.split_seed),
             "--protocol-version", args.protocol_version,
             "--experiment-tag", args.experiment_tag,
             "--timing-detail", args.timing_detail,
@@ -328,6 +342,8 @@ def main():
             ])
             if not args.v6_disable_early_bird:
                 command.append("--v6-early-bird")
+        if model == "ssb-v7":
+            command.extend(["--v7-hybrid-config-label", hybrid])
         if model == "ssb-v7" and hybrid != "pure":
             if hybrid in {
                 "warmup", "warmup_correction", "layerwise_warmup",
@@ -348,6 +364,10 @@ def main():
             command.extend([
                 "--v7-early-bird-min-events", str(args.v7_early_bird_min_events),
                 "--v7-early-bird-min-steps", str(args.v7_early_bird_min_steps),
+            ])
+        if model == "ssb-v7" and args.v7_target_parameter_ratio is not None:
+            command.extend([
+                "--v7-target-parameter-ratio", str(args.v7_target_parameter_ratio)
             ])
 
         print()

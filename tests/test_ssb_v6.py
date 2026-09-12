@@ -255,6 +255,38 @@ def test_v7_layerwise_cnn_shorthand_expands_by_layer_family():
     assert [mapping.out_idx.numel() for mapping in model._maps[:-1]] == [4, 3, 4, 2, 1]
 
 
+def test_v7_calibrates_layer_profile_to_true_parameter_budget():
+    model = OptimizedSelectedChildModelV7(
+        DenseCNN(3, 32, [64, 128, 256], [1024, 512], 10, pooled_size=4),
+        keep_ratio=0.2,
+        score_refresh_steps=25,
+        selection_method="weight_l2",
+        layer_keep_ratios=[1.0, 0.5, 0.2],
+        target_parameter_ratio=0.20,
+    )
+    model.refresh_child()
+    # Structured integer dimensions make exact equality unlikely; require the
+    # closest realizable profile to be within one tenth of a percentage point.
+    assert abs(model.effective_parameter_ratio() - 0.20) < 0.001
+    assert model.effective_keep_ratio() > model.effective_parameter_ratio()
+
+
+def test_v7_parameter_budget_is_selector_independent():
+    ratios = []
+    for selector in ("random", "gradient_l2", "weight_l2", "taylor"):
+        model = OptimizedSelectedChildModelV7(
+            DenseMLP(16, [32, 16], 4),
+            keep_ratio=0.2,
+            score_refresh_steps=25,
+            selection_method=selector,
+            layer_keep_ratios=[1.0, 0.5],
+            target_parameter_ratio=0.20,
+        )
+        model.refresh_child()
+        ratios.append(model.effective_parameter_ratio())
+    assert len(set(ratios)) == 1
+
+
 def test_v7_early_bird_respects_minimum_scoring_events():
     model = OptimizedSelectedChildModelV7(
         DenseMLP(3, [5], 2),
@@ -313,3 +345,22 @@ def test_v7_dense_correction_preserves_dense_update_and_rebuilds_child():
     assert child_optimizer.state
     assert model.dense_correction_count == 1
     assert not model.dense_correction_due()
+
+
+def test_v7_dense_correction_does_not_override_score_refresh_schedule():
+    model = OptimizedSelectedChildModelV7(
+        DenseMLP(4, [6], 3),
+        keep_ratio=0.5,
+        score_refresh_steps=100,
+        selection_method="weight_l2",
+        dense_correction_steps=25,
+    )
+    model.refresh_child()
+    model.optimizer_step_count = 25
+    model.sparse_steps_since_dense_correction = 25
+    child_optimizer = model.make_optimizer(1e-3)
+    master_optimizer = model.prepare_dense_correction(child_optimizer, 1e-3)
+    model.finish_dense_correction(master_optimizer, 1e-3)
+    assert not model.last_correction_scoring_event
+    assert model.scoring_event_count == 0
+    assert model.refresh_count == 2

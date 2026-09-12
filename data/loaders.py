@@ -62,12 +62,32 @@ def _deterministic_subset(dataset, size: int, seed: int):
     return Subset(dataset, indices)
 
 
-def build_loaders(name, batch_size, seed, subset, data_dir, num_workers):
+def _deterministic_train_val_split(dataset, validation_fraction: float, split_seed: int):
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be in (0, 1).")
+    generator = torch.Generator().manual_seed(split_seed)
+    indices = torch.randperm(len(dataset), generator=generator)
+    validation_size = max(1, round(len(dataset) * validation_fraction))
+    validation = Subset(dataset, indices[:validation_size].tolist())
+    training = Subset(dataset, indices[validation_size:].tolist())
+    return training, validation
+
+
+def build_loaders(
+    name, batch_size, seed, subset, data_dir, num_workers,
+    validation_fraction=0.1, split_seed=2026, include_test=False,
+):
     name = normalize_dataset_name(name)
-    train_set, val_set = _datasets(name, Path(data_dir))
+    full_train_set, test_set = _datasets(name, Path(data_dir))
+    train_set, val_set = _deterministic_train_val_split(
+        full_train_set, validation_fraction, split_seed
+    )
     train_set = _deterministic_subset(train_set, subset, seed)
     generator = torch.Generator().manual_seed(seed)
     common = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=False)
     train_loader = DataLoader(train_set, shuffle=True, generator=generator, **common)
     val_loader = DataLoader(val_set, shuffle=False, **common)
-    return train_loader, val_loader
+    if not include_test:
+        return train_loader, val_loader
+    test_loader = DataLoader(test_set, shuffle=False, **common)
+    return train_loader, val_loader, test_loader
